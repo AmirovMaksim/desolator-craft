@@ -72,21 +72,22 @@ public class MainMenuState extends BaseAppState implements RawInputListener {
     private MenuButton classBtn;
     private MenuButton typeToggleBtn;
 
-    private Picture bgPic;
+    private Picture bannerPic, bottomBgPic, leftPanel, centerPanel, rightPanel;
     private final List<SpriteButton> spriteButtons = new ArrayList<>();
+    private boolean mousePressed = false;
 
     private List<File> worldFilesList = new ArrayList<>();
     private int currentSavePage = 0;
     private static final int SAVES_PER_PAGE = 3;
 
-    // нормированные координаты вырезки кнопок в референсе (x0,x1,y0,h) / (REF_W,REF_H)
-    // точные границы найдены сканом (каждая кнопка — цельный кусок, без стыка)
-    private static final float[][] BTN_COORDS = {
-        {388, 636, 274, 22}, // НОВАЯ ИГРА
-        {388, 636, 305, 49}, // ПРОДОЛЖИТЬ
-        {388, 636, 359, 49}, // НАСТРОЙКИ
-        {388, 636, 423, 47}, // МАСТЕРСКАЯ
-        {388, 636, 475, 51}, // ВЫХОД
+    // координаты вырезки 5 кнопок из нового мокапа (x0,y0,x1,y1) в пикселях 1024x559
+    // каждая кнопка — цельный кусок (без стыка)
+    private static final int[][] BTN_RECTS = {
+        {395, 331, 651, 355}, // НОВАЯ ИГРА
+        {395, 360, 651, 383}, // ПРОДОЛЖИТЬ
+        {395, 388, 651, 412}, // НАСТРОЙКИ
+        {395, 417, 651, 440}, // МАСТЕРСКАЯ
+        {395, 445, 651, 469}, // ВЫХОД
     };
     private static final int REF_W = 1024, REF_H = 559;
 
@@ -94,10 +95,20 @@ public class MainMenuState extends BaseAppState implements RawInputListener {
         this.onStartGame = onStartGame;
     }
 
-    /** Грузит PNG как Texture2D. flipY=true — корректная ориентация GUI в jME. */
-    private Texture2D tex(String path) {
+    /** Грузит PNG как Texture2D. flipY=true — корректная ориентация GUI в jME. useAlpha: прозрачность (для наших сплошных слоёв = false). */
+    private Texture2D tex(String path, boolean useAlpha) {
         Texture t = app.getAssetManager().loadTexture(new TextureKey("Interface/Menu/" + path, true));
+        t.setMagFilter(Texture.MagFilter.Bilinear);
+        t.setMinFilter(Texture.MinFilter.BilinearNoMipMaps);
         return (Texture2D) t;
+    }
+    private Texture2D tex(String path) { return tex(path, false); }
+
+    private void addLayer(String name, String file, int z) {
+        Picture p = new Picture(name);
+        p.setTexture(app.getAssetManager(), tex(file), false);
+        p.setLocalTranslation(0, 0, z);
+        menuNode.attachChild(p);
     }
 
     @Override
@@ -110,13 +121,15 @@ public class MainMenuState extends BaseAppState implements RawInputListener {
         this.lastScreenWidth = app.getCamera().getWidth();
         this.lastScreenHeight = app.getCamera().getHeight();
 
-        // ФОН (содержит логотип из референса целиком; кнопки — отдельными спрайтами поверх)
-        bgPic = new Picture("MenuBG");
-        bgPic.setTexture(app.getAssetManager(), tex("background.png"), true);
-        bgPic.setLocalTranslation(0, 0, -10);
-        menuNode.attachChild(bgPic);
+        // НОВЫЙ МАКЕТ (все слои — сплошные вырезки из мокапа, без альфы -> ноль швов)
+        // z-порядок: баннер(-12) < низ-база(-11) < панели(-10) < кнопки(-7) < эмберы(-2)
+        addLayer("Banner", "top_banner.png", -12);
+        addLayer("BottomBg", "bottom_bg.png", -11);
+        addLayer("LeftPanel", "logo.png", -10);
+        addLayer("CenterPanel", "button_container_bg.png", -10);
+        addLayer("RightPanel", "empty_panel.png", -10);
 
-        // эмберы (атмосфера)
+        // эмберы (атмосфера) — поверх всего фона
         for (int i = 0; i < 40; i++) createEmber(lastScreenWidth, lastScreenHeight);
 
         buildSpriteButtons();
@@ -153,26 +166,45 @@ public class MainMenuState extends BaseAppState implements RawInputListener {
 
     private void layoutSprites() {
         float w = lastScreenWidth, h = lastScreenHeight;
-        bgPic.setWidth(w); bgPic.setHeight(h);
 
+        // Макет: весь мокап 1024x559 масштабируется пропорционально по ширине -> s,
+        // центрируется по вертикали; делитель ровно на 50% (H/2), как в мокапе (279/559).
+        float s = w / (float) REF_W;
+        float scaledH = REF_H * s;
+        float offY = (h - scaledH) / 2f;   // смещение по Y, чтобы мокап был по центру
+
+        // слои (баннер, низ-база, панели)
+        for (Spatial sp : menuNode.getChildren()) {
+            if (sp instanceof Picture) {
+                Picture p = (Picture) sp;
+                p.setWidth(w); p.setHeight(scaledH);
+                p.setLocalTranslation(0, offY, p.getLocalTranslation().z);
+            }
+        }
+
+        float dividerY = h / 2f; // 50/50
+
+        // кнопки (поверх center-панели), в реальных координатах мокапа
         for (int i = 0; i < spriteButtons.size(); i++) {
             SpriteButton sb = spriteButtons.get(i);
-            float[] c = BTN_COORDS[i];
-            float nx0 = c[0] / REF_W, nx1 = c[1] / REF_W;
-            float ny0 = c[2] / REF_H, nh = c[3] / REF_H;
+            int[] r = BTN_RECTS[i];
+            float nx0 = r[0] / (float) REF_W, ny0 = r[1] / (float) REF_H;
+            float nx1 = r[2] / (float) REF_W, ny1 = r[3] / (float) REF_H;
             float bw = (nx1 - nx0) * w;
-            float bh = nh * h;
-            float cx = ((nx0 + nx1) / 2f) * w;
-            float cy = h - ((ny0 + nh / 2f)) * h; // GUI Y (сверху вниз)
+            float bh = (ny1 - ny0) * h;            // используем h (делитель 50/50 = H/2)
+            float cx = (nx0 + nx1) / 2f * w;
+            float cy = h - ((ny0 + ny1) / 2f) * h; // GUI Y сверху вниз
 
             if (sb.pic == null) {
                 sb.pic = new Picture("SB_" + i);
-                sb.pic.setTexture(app.getAssetManager(), tex(sb.texName), true);
+                sb.pic.setTexture(app.getAssetManager(), tex(sb.texName, false), false);
+                sb.pic.setLocalTranslation(0, 0, -7);
                 menuNode.attachChild(sb.pic);
             }
-            sb.w = bw; sb.h = bh; sb.cx = cx; sb.cy = cy;
+            sb.baseW = bw; sb.baseH = bh; sb.baseX = cx - bw / 2f; sb.baseY = cy - bh / 2f;
+            sb.cx = cx; sb.cy = cy;
             sb.pic.setWidth(bw); sb.pic.setHeight(bh);
-            sb.pic.setLocalTranslation(cx - bw / 2, cy - bh / 2, -7);
+            sb.pic.setLocalTranslation(sb.baseX, sb.baseY, -7);
         }
     }
 
@@ -365,15 +397,19 @@ public class MainMenuState extends BaseAppState implements RawInputListener {
 
         if (currentPage == MenuPage.MAIN) {
             for (SpriteButton sb : spriteButtons) {
-                boolean isHovered = mousePos.x >= sb.cx - sb.w / 2 && mousePos.x <= sb.cx + sb.w / 2
-                                 && mousePos.y >= sb.cy - sb.h / 2 && mousePos.y <= sb.cy + sb.h / 2;
+                boolean isHovered = mousePos.x >= sb.cx - sb.baseW / 2 && mousePos.x <= sb.cx + sb.baseW / 2
+                                 && mousePos.y >= sb.cy - sb.baseH / 2 && mousePos.y <= sb.cy + sb.baseH / 2;
                 if (isHovered && prevHovered != sb && mainApp.soundManager != null) mainApp.soundManager.uiHover();
-                float target = isHovered ? 1.07f : 1.0f;
-                sb.scale = FastMath.interpolateLinear(tpf * 12f, sb.scale, target);
-                float cw = sb.w * sb.scale, ch = sb.h * sb.scale;
+
+                float target = 1.0f;
+                if (isHovered) target = mousePressed ? 0.95f : 1.05f;
+                sb.scale = FastMath.interpolateLinear(tpf * 10f, sb.scale, target);
+                float cw = sb.baseW * sb.scale, ch = sb.baseH * sb.scale;
                 if (sb.pic != null) {
                     sb.pic.setWidth(cw); sb.pic.setHeight(ch);
-                    sb.pic.setLocalTranslation(sb.cx - cw / 2f, sb.cy - ch / 2f, -7);
+                    float offsetX = (sb.baseW - cw) / 2f;
+                    float offsetY = (sb.baseH - ch) / 2f;
+                    sb.pic.setLocalTranslation(sb.baseX + offsetX, sb.baseY + offsetY, -7);
                 }
                 if (isHovered) prevHovered = sb;
             }
@@ -396,11 +432,14 @@ public class MainMenuState extends BaseAppState implements RawInputListener {
 
     @Override
     public void onMouseButtonEvent(MouseButtonEvent evt) {
+        if (evt.getButtonIndex() == 0) {
+            mousePressed = !evt.isReleased(); // true пока ЛКМ зажата
+        }
         if (evt.isReleased() && evt.getButtonIndex() == 0) {
             Vector2f mp = new Vector2f(evt.getX(), evt.getY());
             if (currentPage == MenuPage.MAIN) {
                 for (SpriteButton sb : spriteButtons) {
-                    if (mp.x >= sb.cx - sb.w / 2 && mp.x <= sb.cx + sb.w / 2 && mp.y >= sb.cy - sb.h / 2 && mp.y <= sb.cy + sb.h / 2) {
+                    if (mp.x >= sb.cx - sb.baseW / 2 && mp.x <= sb.cx + sb.baseW / 2 && mp.y >= sb.cy - sb.baseH / 2 && mp.y <= sb.cy + sb.baseH / 2) {
                         if (mainApp.soundManager != null) mainApp.soundManager.uiClick();
                         if (sb.action != null) sb.action.run();
                         return;
@@ -448,7 +487,10 @@ public class MainMenuState extends BaseAppState implements RawInputListener {
 
     private static class SpriteButton {
         String texName; Runnable action;
-        Picture pic; float cx, cy, w, h, scale = 1.0f;
+        Picture pic;
+        float baseX, baseY, baseW, baseH;  // базовый прямоугольник (до анимации)
+        float cx, cy;                       // центр (для hit-test)
+        float scale = 1.0f;
         SpriteButton(String texName, Runnable action) { this.texName = texName; this.action = action; }
     }
 
