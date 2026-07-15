@@ -79,6 +79,9 @@ public class World {
 
     private final java.util.concurrent.ConcurrentLinkedQueue<Chunk> finishedChunksQueue = new java.util.concurrent.ConcurrentLinkedQueue<>();
 
+    private VillageManager villageManager = null;
+    public void setVillageManager(VillageManager vm) { this.villageManager = vm; }
+
     public static class WorldSaveData {
         public long seed = -1;
         public boolean creative = true;
@@ -177,27 +180,37 @@ public class World {
         @Override
         public void run() {
             String key = cx + "," + cz;
-            if (taskType == 0) {
-                int playerCX = (int) Math.floor(playerPos.x / Chunk.SIZE_X);
-                int playerCZ = (int) Math.floor(playerPos.z / Chunk.SIZE_Z);
-                if (Math.abs(cx - playerCX) > GameSettings.renderDistance + 1 || 
-                    Math.abs(cz - playerCZ) > GameSettings.renderDistance + 1) {
-                    activeGenerationTasks.remove(key);
-                    return;
+            try {
+                if (taskType == 0) {
+                    int playerCX = (int) Math.floor(playerPos.x / Chunk.SIZE_X);
+                    int playerCZ = (int) Math.floor(playerPos.z / Chunk.SIZE_Z);
+                    if (Math.abs(cx - playerCX) > GameSettings.renderDistance + 1 || 
+                        Math.abs(cz - playerCZ) > GameSettings.renderDistance + 1) {
+                        activeGenerationTasks.remove(key);
+                        return;
+                    }
+                    Chunk newChunk = new Chunk(cx, cz, blockMaterials, World.this);
+                    newChunk.prebuildMeshes();
+                    finishedChunksQueue.add(newChunk);
+                } else {
+                    if (chunk != null) {
+                        chunk.prebuildMeshes();
+                        app.enqueue(() -> {
+                            if (loadedChunks.containsKey(key)) {
+                                chunk.applyPrebuiltMeshes(blockMaterials);
+                            }
+                            pendingRebuildTasks.remove(key);
+                        });
+                    }
                 }
-                Chunk newChunk = new Chunk(cx, cz, blockMaterials, World.this);
-                newChunk.prebuildMeshes();
-                finishedChunksQueue.add(newChunk);
-            } else {
-                if (chunk != null) {
-                    chunk.prebuildMeshes();
-                    app.enqueue(() -> {
-                        if (loadedChunks.containsKey(key)) {
-                            chunk.applyPrebuiltMeshes(blockMaterials);
-                        }
-                        pendingRebuildTasks.remove(key);
-                    });
-                }
+            } catch (Throwable ex) {
+                // КРИТИЧНО: если задача упала, обязательно освобождаем слот,
+                // иначе key навсегда занимает лимит MAX_GEN_TASKS и генерация
+                // чанков полностью встаёт ("Bg Tasks" застревает на максимуме).
+                activeGenerationTasks.remove(key);
+                pendingRebuildTasks.remove(key);
+                System.err.println("[ChunkGen] Задача (" + key + ") упала: " + ex);
+                ex.printStackTrace();
             }
         }
     }
@@ -233,6 +246,7 @@ public class World {
                 rootNode.attachChild(chunk.getNode());
                 loadedChunks.put(key, chunk);
                 activeGenerationTasks.remove(key);
+                if (villageManager != null) villageManager.onChunkLoaded(chunk.getChunkX(), chunk.getChunkZ());
                 // ОПТИМИЗАЦИЯ: дальние чанки не отбрасывают тень
                 // (только получают) -> shadow pass грузит лишь ближнюю округу.
                 int pCX = (int) Math.floor(playerPos.x / Chunk.SIZE_X);
@@ -428,6 +442,30 @@ public class World {
         if (chunk == null) return 0; 
 
         return chunk.getBlockDirect(bx, y, bz);
+    }
+
+    /** Bulk-запись блока БЕЗ пересборки геометрии (для VillageManager).
+     *  Пишет напрямую в массив чанка; ребилд делается отдельно rebuildChunkNow().
+     *  БЕЗ этого каждый блок деревни вызывал бы полный prebuildMeshes чанка -> зависание. */
+    public void setBlockAtSafe(int x, int y, int z, byte type) {
+        if (y < 0 || y >= Chunk.SIZE_Y) return;
+        int cx = Math.floorDiv(x, Chunk.SIZE_X);
+        int cz = Math.floorDiv(z, Chunk.SIZE_Z);
+        Chunk c = loadedChunks.get(cx + "," + cz);
+        if (c == null) return;
+        int bx = Math.floorMod(x, Chunk.SIZE_X);
+        int bz = Math.floorMod(z, Chunk.SIZE_Z);
+        c.setBlock(bx, y, bz, type);
+    }
+
+    /** Однократная пересборка геометрии чанка (после bulk-записи блоков). */
+    public void rebuildChunkNow(int cx, int cz) {
+        Chunk c = loadedChunks.get(cx + "," + cz);
+        if (c != null) {
+            c.prebuildMeshes();
+            c.applyPrebuiltMeshes(blockMaterials);
+            c.getNode().updateModelBound();
+        }
     }
 
     public void setBlockAt(int x, int y, int z, byte type) {
@@ -676,6 +714,10 @@ public class World {
     // ДОБАВЛЕНО: взрыв TNT. Выбивает блоки в радиусе, разбрасывает частицы,
     // роняет предметы (если мир не в креативе) и наносит игроку урон,
     // ослабевающий с расстоянием от эпицентра.
+    public void explodeAt(Vector3f pos, float radius, float power) {
+        createExplosion((int) Math.floor(pos.x), (int) Math.floor(pos.y), (int) Math.floor(pos.z), radius, app);
+    }
+
     public void createExplosion(int cx, int cy, int cz, float radius, Main app) {
         int r = (int) Math.ceil(radius);
 
@@ -727,36 +769,9 @@ public class World {
         if (isFlatWorld) return 4; 
 
         int biome = Chunk.getBiomeAt(x, z, this);
-        double heightValue = 64.0; 
-
-        if (biome == 1) { 
-            double n = Chunk.PerlinNoise.noise((x + seedOffsetX) * 0.010, (z + seedOffsetZ) * 0.010);
-            heightValue = n * 6.0 + 68;
-        } else if (biome == 2) { 
-            double n = Chunk.PerlinNoise.noise((x + seedOffsetX) * 0.012, (z + seedOffsetZ) * 0.012);
-            heightValue = n * 10.0 + 72;
-        } else if (biome == 3) { 
-            double n1 = Chunk.PerlinNoise.noise((x + seedOffsetX) * 0.016, (z + seedOffsetZ) * 0.016);
-            double n2 = Chunk.PerlinNoise.noise((x + seedOffsetX) * 0.05, (z + seedOffsetZ) * 0.05);
-            heightValue = (n1 + n2 * 0.30) * 28.0 + 84;
-        } else if (biome == 4) { 
-            double n = Chunk.PerlinNoise.noise((x + seedOffsetX) * 0.014, (z + seedOffsetZ) * 0.014);
-            heightValue = n * 11.0 + 73;
-        } else if (biome == 5) { 
-            double n = Chunk.PerlinNoise.noise((x + seedOffsetX) * 0.015, (z + seedOffsetZ) * 0.015);
-            heightValue = n * 5.0 + 66;
-        } else if (biome == 6) { 
-            heightValue = 63.0 + Chunk.PerlinNoise.noise((x + seedOffsetX) * 0.02, (z + seedOffsetZ) * 0.02) * 2.0;
-        } else if (biome == 14) { 
-            double n = Chunk.PerlinNoise.noise((x + seedOffsetX) * 0.011, (z + seedOffsetZ) * 0.011);
-            heightValue = n * 13.0 + 71;
-        } else if (biome == 15) { 
-            double n = Chunk.PerlinNoise.noise((x + seedOffsetX) * 0.012, (z + seedOffsetZ) * 0.012);
-            heightValue = n * 20.0 + 72;
-        } else {
-            double n = Chunk.PerlinNoise.noise((x + seedOffsetX) * 0.011, (z + seedOffsetZ) * 0.011);
-            heightValue = n * 14.0 + 72;
-        }
+        // Единый источник высоты — та же формула, что и в генерации чанка,
+        // чтобы спавн/подгонка не расходились с реальной поверхностью.
+        double heightValue = Chunk.biomeHeight(biome, x + seedOffsetX, z + seedOffsetZ);
         return (int) Math.max(5, Math.min(heightValue, Chunk.SIZE_Y - 1));
     }
 }

@@ -5,6 +5,7 @@ import java.awt.GraphicsEnvironment;
 import java.util.List;
 
 import com.jme3.app.SimpleApplication;
+import com.jme3.asset.AssetManager;
 import com.jme3.font.BitmapText;
 import com.jme3.input.KeyInput;
 import com.jme3.input.MouseInput;
@@ -51,6 +52,10 @@ public class Main extends SimpleApplication implements RawInputListener {
     final PlayerModel playerModel = new PlayerModel();
     final UserInterfaceManager ui = new UserInterfaceManager();
     final MobManager mobManager = new MobManager(); 
+    VillageManager villageManager = null;
+
+    /** Безопасный доступ к assetManager для внешних менеджеров (VillageManager и т.п.). */
+    public AssetManager getAssetManagerSafe() { return assetManager; }
 
     final EnvironmentManager environmentManager = new EnvironmentManager();
     final ItemDropManager itemDropManager = new ItemDropManager();
@@ -478,6 +483,8 @@ public class Main extends SimpleApplication implements RawInputListener {
 
         rootNode.setShadowMode(RenderQueue.ShadowMode.CastAndReceive); 
         world = new World(blockMaterials, rootNode, slotFile, this);
+        villageManager = new VillageManager(world, this);
+        world.setVillageManager(villageManager);
         loadingScreen.init(assetManager, guiNode, guiFont, cam.getWidth(), cam.getHeight());
         cloudManager.init(assetManager, rootNode);
 

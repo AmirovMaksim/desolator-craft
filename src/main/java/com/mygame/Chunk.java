@@ -40,6 +40,79 @@ public class Chunk {
         return total / maxValue;
     }
 
+    // Ридж-шум (острые гребни) — для гор и дюн. |noise| перевёрнут -> хребты.
+    private static double ridged(double x, double z, int octaves, double persistence, double scale) {
+        double total = 0, freq = scale, amp = 1, maxV = 0;
+        for (int i = 0; i < octaves; i++) {
+            double n = 1.0 - Math.abs(PerlinNoise.noise(x * freq, z * freq));
+            total += n * n * amp;
+            maxV += amp;
+            amp *= persistence;
+            freq *= 2.0;
+        }
+        return total / maxV;
+    }
+
+    /**
+     * Детализированная высота ландшафта для конкретного биома.
+     * Раньше на каждую колонку считались ВСЕ высоты (впустую); теперь только нужная,
+     * с добавлением рельефа: гребни гор, дюны пустыни, холмы леса/джунглей.
+     */
+    static double biomeHeight(int biome, double x, double z) {
+        switch (biome) {
+            case 1: { // DESERT — дюны (мягкие волны + мелкая рябь)
+                double dunes = fbm(x, z, 3, 0.45, 0.012) * 10.0;
+                double ripple = Math.sin((x + z) * 0.06) * 1.6;
+                return 68 + dunes + ripple;
+            }
+            case 2: // TUNDRA — пологие холмы
+                return 70 + fbm(x, z, 3, 0.40, 0.010) * 12.0;
+            case 3: { // MOUNTAINS — цельные массивы с гребнями (не спайки!)
+                // Крупная низкочастотная база задаёт форму горы, ridged добавляет
+                // умеренные гребни. Малая амплитуда + низкая частота -> НЕ узкие столбы.
+                double base = fbm(x, z, 4, 0.5, 0.005) * 26.0 + 82;
+                double ridge = ridged(x, z, 3, 0.5, 0.006) * 26.0;
+                double h = base + ridge;
+                return Math.min(h, 118); // потолок ниже SIZE_Y, чтобы не упираться в край
+            }
+            case 4: // REDWOOD — крупные холмы
+                return 74 + fbm(x, z, 4, 0.50, 0.010) * 24.0;
+            case 5: { // VOLCANIC — неровное плато с провалами
+                double h = fbm(x, z, 4, 0.60, 0.015) * 12.0 + 64;
+                double crater = ridged(x, z, 3, 0.5, 0.02) * 8.0;
+                return h - crater * 0.5;
+            }
+            case 6: // SWAMP — почти плоско у воды
+                return 61.5 + fbm(x, z, 2, 0.30, 0.020) * 4.0;
+            case 7: // CHERRY — мягкие холмы
+                return 72 + fbm(x, z, 3, 0.50, 0.010) * 16.0;
+            case 8: // OAK FOREST — холмистый
+                return 73 + fbm(x, z, 4, 0.48, 0.009) * 20.0;
+            case 9: // AUTUMN — холмистый
+                return 73 + fbm(x, z, 3, 0.45, 0.011) * 15.0;
+            case 10: // GLACIER — высокие сглаженные плато
+                return 76 + fbm(x, z, 4, 0.55, 0.008) * 26.0;
+            case 11: // MYCELIUM — низкие холмы
+                return 66 + fbm(x, z, 3, 0.40, 0.014) * 11.0;
+            case 12: // OCEAN — дно
+                return 38 + fbm(x, z, 2, 0.30, 0.02) * 4.0;
+            case 13: // BEACH — почти плоский берег
+                return 62 + fbm(x, z, 2, 0.30, 0.02) * 2.0;
+            case 14: { // SAVANNA — плато со ступенями (акациевые равнины)
+                double h = fbm(x, z, 3, 0.42, 0.011) * 13.0 + 71;
+                double plateau = Math.floor(fbm(x, z, 2, 0.4, 0.006) * 4.0) * 2.0;
+                return h + plateau;
+            }
+            case 15: { // JUNGLE — бугристый, густой рельеф
+                double h = fbm(x, z, 4, 0.52, 0.012) * 22.0 + 72;
+                double bumps = ridged(x, z, 3, 0.5, 0.03) * 4.0;
+                return h + bumps;
+            }
+            default: // OAK FOREST по умолчанию
+                return 73 + fbm(x, z, 3, 0.48, 0.010) * 18.0;
+        }
+    }
+
     public Chunk(int cx, int cz, Material[] blockMaterials, World world) {
         this.chunkX = cx;
         this.chunkZ = cz;
@@ -71,42 +144,22 @@ public class Chunk {
                 double worldXS = worldX + seedX;
                 double worldZS = worldZ + seedZ;
 
-                double desertH = fbm(worldXS, worldZS, 3, 0.45, 0.012) * 14.0 + 68;
-                double tundraH = fbm(worldXS, worldZS, 3, 0.40, 0.010) * 12.0 + 70;
-                double forestH = fbm(worldXS, worldZS, 3, 0.48, 0.010) * 18.0 + 73;
-                double redwoodH = fbm(worldXS, worldZS, 3, 0.50, 0.012) * 22.0 + 74;
-                double volcanicH = fbm(worldXS, worldZS, 4, 0.60, 0.015) * 10.0 + 64;
-                double swampH = 61.5 + fbm(worldXS, worldZS, 2, 0.30, 0.020) * 4.0;
-                double cherryH = fbm(worldXS, worldZS, 3, 0.50, 0.010) * 16.0 + 72;
-                double autumnH = fbm(worldXS, worldZS, 3, 0.45, 0.011) * 15.0 + 73;
-                double glacierH = fbm(worldXS, worldZS, 4, 0.55, 0.008) * 26.0 + 76;
-                double myceliumH = fbm(worldXS, worldZS, 3, 0.40, 0.014) * 11.0 + 66;
-                double savannaH = fbm(worldXS, worldZS, 3, 0.42, 0.011) * 13.0 + 71;
-                double jungleH = fbm(worldXS, worldZS, 4, 0.52, 0.012) * 20.0 + 72;
-
-                double mountainH = fbm(worldXS, worldZS, 5, 0.58, 0.008) * 48.0 + 82;
-
-                double oceanH = 38 + fbm(worldXS, worldZS, 2, 0.30, 0.02) * 4.0;
-                double beachH = 62 + fbm(worldXS, worldZS, 2, 0.30, 0.02) * 2.0;
-
-                double heightValue = forestH;
                 int biome = getBiomeAt(worldX, worldZ, world);
 
-                if (biome == 1) heightValue = desertH;
-                else if (biome == 2) heightValue = tundraH;
-                else if (biome == 3) heightValue = mountainH;
-                else if (biome == 4) heightValue = redwoodH;
-                else if (biome == 5) heightValue = volcanicH;
-                else if (biome == 6) heightValue = swampH;
-                else if (biome == 7) heightValue = cherryH;
-                else if (biome == 8) heightValue = forestH;
-                else if (biome == 9) heightValue = autumnH;
-                else if (biome == 10) heightValue = glacierH;
-                else if (biome == 11) heightValue = myceliumH;
-                else if (biome == 14) heightValue = savannaH;
-                else if (biome == 15) heightValue = jungleH;
-                else if (biome == 12) heightValue = oceanH;
-                else if (biome == 13) heightValue = beachH;
+                // ОПТИМИЗАЦИЯ + ДЕТАЛИЗАЦИЯ: считаем высоту ТОЛЬКО для нужного биома.
+                // Блендим ВЫСОТУ (не тип биома!) по 5 точкам окрестности -> плавные
+                // склоны на стыках биомов без отвесных обрывов. Высота непрерывна,
+                // поэтому усреднять её корректно (в отличие от номеров биомов).
+                double heightValue = biomeHeight(biome, worldXS, worldZS);
+                {
+                    int[][] off = { {8, 0}, {-8, 0}, {0, 8}, {0, -8} };
+                    double acc = heightValue;
+                    for (int[] o : off) {
+                        int nb = getBiomeAt(worldX + o[0], worldZ + o[1], world);
+                        acc += biomeHeight(nb, worldXS + o[0], worldZS + o[1]);
+                    }
+                    heightValue = acc / 5.0;
+                }
 
                 int height = (int) Math.max(5, Math.min(heightValue, SIZE_Y - 1));
 
@@ -352,9 +405,9 @@ public class Chunk {
                         for (int ty = 1; ty <= h; ty++) {
                             if (surfaceY + ty < SIZE_Y) blocks[x][surfaceY + ty][z] = 9;
                         }
-                    } else if (biome == 3 && blockBelow == 3 && rand.nextFloat() < 0.01f) {
-                        // MOUNTAIN: редкий каменный столб
-                        int h = 4 + rand.nextInt(4);
+                    } else if (biome == 3 && blockBelow == 3 && rand.nextFloat() < 0.015f) {
+                        // MOUNTAIN: низкий валун (не столб!)
+                        int h = 1 + rand.nextInt(2);
                         for (int ty = 1; ty <= h; ty++) {
                             if (surfaceY + ty < SIZE_Y) blocks[x][surfaceY + ty][z] = 3;
                         }
@@ -408,17 +461,12 @@ public class Chunk {
     }
 
     public static int getBiomeAt(int x, int z, World world) {
-        // ПЛАВНЫЙ ПЕРЕХОД биомов: усредняем "сырой" биом по окрестности,
-        // чтобы убрать резкие границы (раньше биомы "рубились" ступеньками).
-        int sum = 0;
-        int n = 0;
-        for (int dx = -2; dx <= 2; dx += 2) {
-            for (int dz = -2; dz <= 2; dz += 2) {
-                sum += rawBiomeAt(x + dx, z + dz, world);
-                n++;
-            }
-        }
-        return Math.round((float) sum / n);
+        // Биом берём напрямую из непрерывного низкочастотного шума (temp/humid).
+        // Плавность границ обеспечивают САМИ поля temp/humid + мягкий джиттер в
+        // rawBiomeAt. РАНЬШЕ здесь усреднялись НОМЕРА биомов (desert=1..jungle=15) —
+        // это математически бессмысленно и порождало ложные биомы на стыках
+        // (среднее пустыни и джунглей давало посторонний биом). Убрано.
+        return rawBiomeAt(x, z, world);
     }
 
     // "Сырой" биом без сглаживания — используется внутри getBiomeAt и генерации
@@ -426,18 +474,22 @@ public class Chunk {
         double seedX = world.getSeedOffsetX();
         double seedZ = world.getSeedOffsetZ();
 
-        // Континентальный маскинг: крупный шум -> суша/океан/горы
-        double continent = PerlinNoise.noise((x + seedX) * 0.0009, (z + seedZ) * 0.0009);
+        // Континентальный маскинг: очень крупный шум -> суша/океан
+        double continent = PerlinNoise.noise((x + seedX) * 0.0006, (z + seedZ) * 0.0006);
 
-        double jitterX = PerlinNoise.noise((x + seedX) * 0.08, (z + seedZ) * 0.08) * 16.0;
-        double jitterZ = PerlinNoise.noise((z + seedX) * 0.08, (x + seedZ) * 0.08) * 16.0;
+        // Лёгкий джиттер границ (чтобы края биомов были не идеально ровными,
+        // но и НЕ дробили биомы на мелкие пятна): низкая частота + малая амплитуда.
+        double jitterX = PerlinNoise.noise((x + seedX) * 0.01, (z + seedZ) * 0.01) * 40.0;
+        double jitterZ = PerlinNoise.noise((z + seedX) * 0.01, (x + seedZ) * 0.01) * 40.0;
 
-        double temp = PerlinNoise.noise((x + seedX + jitterX) * 0.0012, (z + seedZ + jitterZ) * 0.0012);
-        double humid = PerlinNoise.noise((x + seedX + jitterX + 10000) * 0.0015, (z + seedZ + jitterZ - 10000) * 0.0015);
+        // КРУПНЫЕ биомы: низкая частота temp/humid -> большие цельные зоны
+        // (было 0.0012/0.0015 -> биомы были мелкими и хаотичными).
+        double temp = PerlinNoise.noise((x + seedX + jitterX) * 0.0004, (z + seedZ + jitterZ) * 0.0004);
+        double humid = PerlinNoise.noise((x + seedX + jitterX + 10000) * 0.0005, (z + seedZ + jitterZ - 10000) * 0.0005);
 
         // Океан/глубоководье по континенту -> не плодим сушу везде
-        if (continent < -0.55) return 12; // OCEAN (новый биом-индекс)
-        if (continent < -0.30) return 13; // BEACH/SHORE
+        if (continent < -0.55) return 12; // OCEAN
+        if (continent < -0.38) return 13; // BEACH/SHORE
 
         if (temp < -0.45) {
             return humid > 0.1 ? 10 : 2;
