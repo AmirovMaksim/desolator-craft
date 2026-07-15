@@ -1,0 +1,26 @@
+# Сборка
+target/
+out/
+bin/
+*.class
+
+# Сейвы игры (персональные, не коммитим)
+save_*.dat
+*.dat
+
+# Логи
+*.log
+dc_crash.log
+
+# IDE
+.vscode/
+*.iml
+.idea/
+
+# Служебное
+.github/modernize/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
