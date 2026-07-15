@@ -60,6 +60,7 @@ public class World {
     private double seedOffsetZ;
     private boolean isCreative = true;
     private boolean isFlatWorld = false;
+    private int playerClass = 0; // RPG класс (0 воин, 1 маг, 2 лучник)
 
     private int activeRenderDistance = -1;
     private float fluidAccumulator = 0.0f;
@@ -79,8 +80,6 @@ public class World {
 
     private final java.util.concurrent.ConcurrentLinkedQueue<Chunk> finishedChunksQueue = new java.util.concurrent.ConcurrentLinkedQueue<>();
 
-    private VillageManager villageManager = null;
-    public void setVillageManager(VillageManager vm) { this.villageManager = vm; }
 
     public static class WorldSaveData {
         public long seed = -1;
@@ -114,6 +113,8 @@ public class World {
     public void setCreative(boolean creative) { this.isCreative = creative; }
     public boolean isFlatWorld() { return isFlatWorld; }
     public void setFlatWorld(boolean flat) { this.isFlatWorld = flat; }
+    public void setPlayerClass(int c) { this.playerClass = c; }
+    public int getPlayerClass() { return playerClass; }
     public int getLoadedChunksCount() { return loadedChunks.size(); }
     public int getCachedChunksCount() { return 0; } 
     public int getActiveTasksCount() { return activeGenerationTasks.size(); }
@@ -246,7 +247,6 @@ public class World {
                 rootNode.attachChild(chunk.getNode());
                 loadedChunks.put(key, chunk);
                 activeGenerationTasks.remove(key);
-                if (villageManager != null) villageManager.onChunkLoaded(chunk.getChunkX(), chunk.getChunkZ());
                 // ОПТИМИЗАЦИЯ: дальние чанки не отбрасывают тень
                 // (только получают) -> shadow pass грузит лишь ближнюю округу.
                 int pCX = (int) Math.floor(playerPos.x / Chunk.SIZE_X);
@@ -444,7 +444,7 @@ public class World {
         return chunk.getBlockDirect(bx, y, bz);
     }
 
-    /** Bulk-запись блока БЕЗ пересборки геометрии (для VillageManager).
+    /** Bulk-запись блока БЕЗ пересборки геометрии.
      *  Пишет напрямую в массив чанка; ребилд делается отдельно rebuildChunkNow().
      *  БЕЗ этого каждый блок деревни вызывал бы полный prebuildMeshes чанка -> зависание. */
     public void setBlockAtSafe(int x, int y, int z, byte type) {

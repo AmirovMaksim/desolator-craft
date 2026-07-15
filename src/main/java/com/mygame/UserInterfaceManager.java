@@ -22,6 +22,7 @@ public class UserInterfaceManager {
     private BitmapText crosshair;
     private BitmapText debugText; 
     private Node hudNode;
+    private BitmapFont guiFont;
     private Geometry hotbarBg;
     private Node hotbarBorderOuter;
     private Node hotbarBorderInner;
@@ -33,6 +34,9 @@ public class UserInterfaceManager {
 
     private Geometry healthBarBg;
     private Geometry healthBarFill;
+    private Geometry manaBarBg;
+    private Geometry manaBarFill;
+    private BitmapText classLabel;
     private Geometry hungerBarBg;
     private Geometry hungerBarFill;
 
@@ -112,6 +116,7 @@ public class UserInterfaceManager {
     }
 
     public void init(AssetManager assetManager, Node guiNode, BitmapFont guiFont, float screenW, float screenH) {
+        this.guiFont = guiFont;
         this.assetManager = assetManager; 
         this.screenW = screenW;
         this.screenH = screenH;
@@ -214,6 +219,24 @@ public class UserInterfaceManager {
         hFillMat.setColor("Color", new ColorRGBA(0.85f, 0.12f, 0.12f, 1.0f)); 
         healthBarFill.setMaterial(hFillMat);
         hudNode.attachChild(healthBarFill);
+
+        manaBarBg = new Geometry("ManaBarBg", new Quad(130, 8));
+        Material mBgMat = new Material(assetManager, "Common/MatDefs/Misc/Unshaded.j3md");
+        mBgMat.setColor("Color", new ColorRGBA(0.0f, 0.05f, 0.18f, 0.7f));
+        manaBarBg.setMaterial(mBgMat);
+        hudNode.attachChild(manaBarBg);
+
+        manaBarFill = new Geometry("ManaBarFill", new Quad(1, 8));
+        Material mFillMat = new Material(assetManager, "Common/MatDefs/Misc/Unshaded.j3md");
+        mFillMat.setColor("Color", new ColorRGBA(0.20f, 0.45f, 1.0f, 1.0f));
+        manaBarFill.setMaterial(mFillMat);
+        hudNode.attachChild(manaBarFill);
+
+        classLabel = new BitmapText(guiFont);
+        classLabel.setSize(16);
+        classLabel.setColor(new ColorRGBA(0.9f, 0.85f, 0.5f, 1.0f));
+        classLabel.setText("CLASS: WARRIOR");
+        hudNode.attachChild(classLabel);
 
         hungerBarBg = new Geometry("HungerBarBg", new Quad(130, 8));
         Material huBgMat = new Material(assetManager, "Common/MatDefs/Misc/Unshaded.j3md");
@@ -323,6 +346,10 @@ public class UserInterfaceManager {
 
         saturationBarBg.setLocalTranslation(startX + barW - 135, startY + barH + 18, 1.5f);
         saturationBarFill.setLocalTranslation(startX + barW - 135, startY + barH + 18, 1.6f);
+
+        manaBarBg.setLocalTranslation(startX + 5, startY + barH + 30, 1.5f);
+        manaBarFill.setLocalTranslation(startX + 5, startY + barH + 30, 1.6f);
+        if (classLabel != null) classLabel.setLocalTranslation(startX + 5, startY + barH + 44, 2);
 
         if (weatherLabel != null) {
             weatherLabel.setLocalTranslation(20, 40, 2);
@@ -903,6 +930,13 @@ public class UserInterfaceManager {
                 healthPercent = FastMath.clamp(healthPercent, 0.0f, 1.0f);
                 healthBarFill.setLocalScale(healthPercent * 130.0f, 1.0f, 1.0f);
 
+                float manaPercent = (player.maxMana > 0) ? player.mana / player.maxMana : 0.0f;
+                manaPercent = FastMath.clamp(manaPercent, 0.0f, 1.0f);
+                manaBarFill.setLocalScale(manaPercent * 130.0f, 1.0f, 1.0f);
+                manaBarBg.setCullHint(manaPercent > 0 ? com.jme3.scene.Spatial.CullHint.Inherit : com.jme3.scene.Spatial.CullHint.Always);
+                manaBarFill.setCullHint(manaPercent > 0 ? com.jme3.scene.Spatial.CullHint.Inherit : com.jme3.scene.Spatial.CullHint.Always);
+                if (classLabel != null) classLabel.setText("CLASS: " + (player.playerClass != null ? player.playerClass.displayName : "WARRIOR"));
+
                 float hungerPercent = player.hunger / player.maxHunger;
                 hungerPercent = FastMath.clamp(hungerPercent, 0.0f, 1.0f);
                 hungerBarFill.setLocalScale(hungerPercent * 130.0f, 1.0f, 1.0f);
@@ -1061,7 +1095,6 @@ public class UserInterfaceManager {
             case 13 -> new ColorRGBA(0.15f, 0.15f, 0.16f, 1.0f); 
             case 14 -> new ColorRGBA(0.85f, 0.78f, 0.45f, 1.0f); 
             case 15 -> new ColorRGBA(0.20f, 0.55f, 0.22f, 1.0f); 
-            case 16 -> new ColorRGBA(0.98f, 0.65f, 0.75f, 1.0f); 
             case 19 -> new ColorRGBA(0.68f, 0.28f, 0.98f, 1.0f); 
             case 20 -> new ColorRGBA(0.92f, 0.92f, 0.95f, 1.0f); 
             case 21 -> new ColorRGBA(0.95f, 0.52f, 0.10f, 1.0f); 

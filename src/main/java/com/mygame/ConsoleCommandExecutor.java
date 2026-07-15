@@ -6,6 +6,7 @@ import com.jme3.math.Vector3f;
 public class ConsoleCommandExecutor {
 
     private static final ColorRGBA neonYellow = new ColorRGBA(0.82f, 1.0f, 0.08f, 1.0f);
+    private static final String[] BIOME_NAMES = {"PLAINS","DESERT","TUNDRA","MOUNTAINS","REDWOOD","SWAMP","WASTES","TAIGA","MUSHROOM","MYCELIUM","GLACIER","MYCELIUM ISLAND","OCEAN","BEACH","SAVANNA","JUNGLE","VILLAGE"};
 
     // Имя метода изменено на "execute"
     public static void execute(String rawCmd, Main app) {
@@ -17,10 +18,11 @@ public class ConsoleCommandExecutor {
         String[] parts = cmd.split(" ");
         String base = parts[0].toLowerCase();
 
+        try {
         switch (base) {
             case "/help" -> {
                 app.ui.addConsoleLog("Survival cmds: /heal, /god, /setspawn, /weather <rain/clear>", ColorRGBA.Gray);
-                app.ui.addConsoleLog("Fun cmds: /acid, /dnd, /mobs, /tp <x> <y> <z>, /give <1-30>", ColorRGBA.Gray);
+                app.ui.addConsoleLog("Admin/test: /spawnmob <0-18>, /mobtypes, /biome, /tpbiome <id>, /findvillage, /class, /mobs, /tp <x> <y> <z>, /give <1-33>, /killmobs, /heal, /god, /fly, /weather, /time, /save", ColorRGBA.Gray);
                 app.ui.addConsoleLog("Sys cmds: /sound, /fly, /clear, /speed <val>, /time, /weather, /killmobs, /gravity", ColorRGBA.Gray);
             }
             case "/heal" -> {
@@ -159,7 +161,82 @@ public class ConsoleCommandExecutor {
                     app.ui.addConsoleLog("[SUCCESS] Spatial acceleration factor adjusted to: " + g, neonYellow);
                 } catch (NumberFormatException e) { app.ui.addConsoleLog("Invalid gravity format", ColorRGBA.Red); }
             }
-            default -> app.ui.addConsoleLog("Unknown command. Type /help", ColorRGBA.Red);
+            case "/spawnmob" -> {
+                if (parts.length < 2) { app.ui.addConsoleLog("Usage: /spawnmob <type 0-18>", ColorRGBA.Red); return; }
+                try {
+                    int t = Integer.parseInt(parts[1]);
+                    if (t < 0 || t > 18) { app.ui.addConsoleLog("Type must be 0-18", ColorRGBA.Red); return; }
+                    Vector3f sp = app.player.pos.add(app.getCamera().getDirection().mult(4.0f));
+                    sp.y = app.world.getMaxHeightAt((int)Math.floor(sp.x), (int)Math.floor(sp.z)) + 2.0f;
+                    app.mobManager.spawnMob(t, app.getAssetManager(), sp);
+                    app.ui.addConsoleLog("[SUCCESS] Spawned mob type " + t, neonYellow);
+                } catch (NumberFormatException e) { app.ui.addConsoleLog("Invalid type", ColorRGBA.Red); }
+            }
+            case "/mobtypes" -> {
+                app.ui.addConsoleLog("0 Sheep 1 Rabbit 2 Bear 3 Golem 4 Fox 5 Slime 6 Void 7 WolfCub 8 FoxRed 9 MushCow", ColorRGBA.Gray);
+                app.ui.addConsoleLog("10 Villager 11 Zombie 12 Skeleton 13 Spider 14 Chicken 15 Pig 16 Cow 17 Wolf 18 Creeper", ColorRGBA.Gray);
+            }
+            case "/biome" -> {
+                int b = app.world.getBiomeAt((int)Math.floor(app.player.pos.x), (int)Math.floor(app.player.pos.z));
+                app.ui.addConsoleLog("[BIOME] id=" + b + " " + BIOME_NAMES[b], neonYellow);
+            }
+            case "/tpbiome" -> {
+                if (parts.length < 2) { app.ui.addConsoleLog("Usage: /tpbiome <id 0-15>", ColorRGBA.Red); return; }
+                try {
+                    int target = Integer.parseInt(parts[1]);
+                    int px = (int)Math.floor(app.player.pos.x), pz = (int)Math.floor(app.player.pos.z);
+                    boolean found = false;
+                    for (int r = 1; r <= 400 && !found; r++) {
+                        for (int dx = -r; dx <= r; dx++) {
+                            for (int dz = -r; dz <= r; dz++) {
+                                if (Math.abs(dx) != r && Math.abs(dz) != r) continue;
+                                int bx = px + dx, bz = pz + dz;
+                                if (app.world.getBiomeAt(bx, bz) == target) {
+                                    int gy = app.world.getMaxHeightAt(bx, bz);
+                                    app.player.pos.set(bx + 0.5f, gy + 2.0f, bz + 0.5f);
+                                    app.player.velocity.set(0,0,0);
+                                    app.ui.addConsoleLog("[SUCCESS] Teleported to biome " + target, neonYellow);
+                                    found = true; break;
+                                }
+                            }
+                            if (found) break;
+                        }
+                        if (found) break;
+                    }
+                    if (!found) app.ui.addConsoleLog("Biome " + target + " not found nearby", ColorRGBA.Red);
+                } catch (NumberFormatException e) { app.ui.addConsoleLog("Invalid id", ColorRGBA.Red); }
+            }
+            case "/class" -> {
+                PlayerClass pc = app.player.playerClass;
+                app.ui.addConsoleLog("[CLASS] " + pc.displayName + " | HP:" + pc.baseHP + " MP:" + pc.baseMana
+                        + " | melee x" + pc.meleeDamageMult + " ranged x" + pc.rangedMult, neonYellow);
+            }
+            case "/findvillage" -> {
+                int px = (int)Math.floor(app.player.pos.x), pz = (int)Math.floor(app.player.pos.z);
+                boolean found = false;
+                for (int r = 1; r <= 600 && !found; r++) {
+                    for (int dx = -r; dx <= r; dx++) {
+                        for (int dz = -r; dz <= r; dz++) {
+                            if (Math.abs(dx) != r && Math.abs(dz) != r) continue;
+                            int bx = px + dx, bz = pz + dz;
+                            if (app.world.getBiomeAt(bx, bz) == 0) { // PLAINS
+                                int gy = app.world.getMaxHeightAt(bx, bz);
+                                app.player.pos.set(bx + 0.5f, gy + 2.0f, bz + 0.5f);
+                                app.player.velocity.set(0,0,0);
+                                app.ui.addConsoleLog("[SUCCESS] Teleported to PLAINS", neonYellow);
+                                found = true; break;
+                            }
+                        }
+                        if (found) break;
+                    }
+                    if (found) break;
+                }
+                if (!found) app.ui.addConsoleLog("No plains found nearby", ColorRGBA.Red);
+            }
+                        default -> app.ui.addConsoleLog("Unknown command. Type /help", ColorRGBA.Red);
+        }
+        } catch (Throwable t) {
+            app.ui.addConsoleLog("[ERROR] command failed: " + t, ColorRGBA.Red);
         }
     }
 }

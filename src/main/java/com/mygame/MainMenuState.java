@@ -13,6 +13,7 @@ import java.util.zip.GZIPInputStream;
 import com.jme3.app.Application;
 import com.jme3.app.SimpleApplication;
 import com.jme3.app.state.BaseAppState;
+import com.jme3.asset.TextureKey;
 import com.jme3.font.BitmapFont;
 import com.jme3.font.BitmapText;
 import com.jme3.input.RawInputListener;
@@ -21,30 +22,37 @@ import com.jme3.input.event.MouseMotionEvent;
 import com.jme3.material.Material;
 import com.jme3.math.ColorRGBA;
 import com.jme3.math.FastMath;
-import com.jme3.math.Quaternion;
 import com.jme3.math.Vector2f;
-import com.jme3.math.Vector3f;
 import com.jme3.scene.Geometry;
 import com.jme3.scene.Node;
-import com.jme3.scene.shape.Box;
+import com.jme3.scene.Spatial;
 import com.jme3.scene.shape.Quad;
+import com.jme3.texture.Texture;
+import com.jme3.texture.Texture2D;
+import com.jme3.ui.Picture;
 
+/**
+ * Главное меню на спрайтах. Фон/лого/кнопки — PNG из Interface/Menu/*.png.
+ * Альфа поддерживается (Picture + BlendMode.Alpha). Координаты: ось Y экрана —
+ * сверху вниз (как в GUI jME), поэтому спрайты кладём по нормированным
+ * координатам вырезки из референса (1024x559).
+ */
 public class MainMenuState extends BaseAppState implements RawInputListener {
 
     public interface WorldStartCallback {
-        void onStart(String slotFile, long seed, boolean isCreative, boolean isFlat);
+        void onStart(String slotFile, long seed, boolean isCreative, boolean isFlat, int playerClass);
     }
 
-    private enum MenuPage {
-        MAIN, SLOTS, NEW_WORLD
-    }
+    private enum MenuPage { MAIN, SLOTS, NEW_WORLD }
 
     private SimpleApplication app;
+    private Main mainApp;
     private Node menuNode;
     private BitmapFont font;
 
     private final List<MenuButton> buttons = new ArrayList<>();
-    private final List<PixelParticle> particles = new ArrayList<>();
+    private Object prevHovered = null;
+    private final List<Ember> embers = new ArrayList<>();
     private final Random random = new Random();
 
     private float lastScreenWidth;
@@ -54,472 +62,149 @@ public class MainMenuState extends BaseAppState implements RawInputListener {
 
     private MenuPage currentPage = MenuPage.MAIN;
     private long pendingSeed = 0;
-    
+    private int pendingClass = 0;
+
     private boolean isCreative = true;
     private boolean isFlat = false;
 
     private MenuButton seedDisplayBtn;
     private MenuButton modeToggleBtn;
+    private MenuButton classBtn;
     private MenuButton typeToggleBtn;
 
-    private BitmapText titleText;
-    private BitmapText titleShadow;
-    private BitmapText splashText; 
-    private float titleAnimTime = 0f;
+    private Picture bgPic;
+    private final List<SpriteButton> spriteButtons = new ArrayList<>();
 
     private List<File> worldFilesList = new ArrayList<>();
     private int currentSavePage = 0;
     private static final int SAVES_PER_PAGE = 3;
 
-    private final String[] splashes = {
-        "PROCEDURAL!", "VOXEL SANDBOX!", "DESOLATING!", "JAVA POWERED!", "DYNAMIC SAVES!", "LOW POLY!"
+    // нормированные координаты вырезки кнопок в референсе (x0,x1,y0,h) / (REF_W,REF_H)
+    // точные границы найдены сканом (каждая кнопка — цельный кусок, без стыка)
+    private static final float[][] BTN_COORDS = {
+        {388, 636, 274, 22}, // НОВАЯ ИГРА
+        {388, 636, 305, 49}, // ПРОДОЛЖИТЬ
+        {388, 636, 359, 49}, // НАСТРОЙКИ
+        {388, 636, 423, 47}, // МАСТЕРСКАЯ
+        {388, 636, 475, 51}, // ВЫХОД
     };
-    private final String activeSplash;
+    private static final int REF_W = 1024, REF_H = 559;
 
     public MainMenuState(WorldStartCallback onStartGame) {
         this.onStartGame = onStartGame;
-        this.activeSplash = splashes[random.nextInt(splashes.length)];
+    }
+
+    /** Грузит PNG как Texture2D. flipY=true — корректная ориентация GUI в jME. */
+    private Texture2D tex(String path) {
+        Texture t = app.getAssetManager().loadTexture(new TextureKey("Interface/Menu/" + path, true));
+        return (Texture2D) t;
     }
 
     @Override
     protected void initialize(Application app) {
         this.app = (SimpleApplication) app;
+        this.mainApp = (Main) app;
         this.menuNode = new Node("MainMenuNode");
         this.font = app.getAssetManager().loadFont("Interface/Fonts/Default.fnt");
 
         this.lastScreenWidth = app.getCamera().getWidth();
         this.lastScreenHeight = app.getCamera().getHeight();
 
-        for (int i = 0; i < 120; i++) {
-            createPixelParticle(lastScreenWidth, lastScreenHeight);
-        }
+        // ФОН (содержит логотип из референса целиком; кнопки — отдельными спрайтами поверх)
+        bgPic = new Picture("MenuBG");
+        bgPic.setTexture(app.getAssetManager(), tex("background.png"), true);
+        bgPic.setLocalTranslation(0, 0, -10);
+        menuNode.attachChild(bgPic);
 
-        createVoxelBackground();
-        createButtons(lastScreenWidth, lastScreenHeight);
+        // эмберы (атмосфера)
+        for (int i = 0; i < 40; i++) createEmber(lastScreenWidth, lastScreenHeight);
 
-        titleShadow = new BitmapText(font);
-        titleShadow.setText("DESOLATOR CRAFT");
-        titleShadow.setSize(54);
-        titleShadow.setColor(ColorRGBA.Black);
-        menuNode.attachChild(titleShadow);
+        buildSpriteButtons();
 
-        titleText = new BitmapText(font);
-        titleText.setText("DESOLATOR CRAFT");
-        titleText.setSize(54);
-        titleText.setColor(new ColorRGBA(0.95f, 0.78f, 0.15f, 1.0f)); 
-        menuNode.attachChild(titleText);
+        app.getInputManager().setCursorVisible(true);
+        app.getViewPort().setBackgroundColor(new ColorRGBA(0.04f, 0.03f, 0.08f, 1.0f));
 
-        splashText = new BitmapText(font);
-        splashText.setText(activeSplash);
-        splashText.setSize(20);
-        splashText.setColor(ColorRGBA.Yellow);
-        menuNode.attachChild(splashText);
-
+        this.app.getGuiNode().attachChild(menuNode);
         app.getInputManager().addRawInputListener(this);
+        layoutSprites();
+    }
+
+    private void buildSpriteButtons() {
+        spriteButtons.add(new SpriteButton("btn_new_game.png", () -> {
+            this.pendingSeed = Math.abs(random.nextLong() % 100000000L);
+            switchPage(MenuPage.NEW_WORLD);
+        }));
+        spriteButtons.add(new SpriteButton("btn_continue.png", () -> {
+            scanWorldFiles(); currentSavePage = 0; switchPage(MenuPage.SLOTS);
+        }));
+        spriteButtons.add(new SpriteButton("btn_settings.png", () -> {
+            MainMenuState m = app.getStateManager().getState(MainMenuState.class);
+            app.getStateManager().detach(m);
+            app.getStateManager().attach(new SettingsMenuState(() -> {
+                app.getStateManager().detach(app.getStateManager().getState(SettingsMenuState.class));
+                app.getStateManager().attach(m);
+            }));
+        }));
+        spriteButtons.add(new SpriteButton("btn_workshop.png", () -> {
+            if (mainApp.soundManager != null) mainApp.soundManager.uiClick();
+        }));
+        spriteButtons.add(new SpriteButton("btn_exit.png", () -> app.stop()));
+    }
+
+    private void layoutSprites() {
+        float w = lastScreenWidth, h = lastScreenHeight;
+        bgPic.setWidth(w); bgPic.setHeight(h);
+
+        for (int i = 0; i < spriteButtons.size(); i++) {
+            SpriteButton sb = spriteButtons.get(i);
+            float[] c = BTN_COORDS[i];
+            float nx0 = c[0] / REF_W, nx1 = c[1] / REF_W;
+            float ny0 = c[2] / REF_H, nh = c[3] / REF_H;
+            float bw = (nx1 - nx0) * w;
+            float bh = nh * h;
+            float cx = ((nx0 + nx1) / 2f) * w;
+            float cy = h - ((ny0 + nh / 2f)) * h; // GUI Y (сверху вниз)
+
+            if (sb.pic == null) {
+                sb.pic = new Picture("SB_" + i);
+                sb.pic.setTexture(app.getAssetManager(), tex(sb.texName), true);
+                menuNode.attachChild(sb.pic);
+            }
+            sb.w = bw; sb.h = bh; sb.cx = cx; sb.cy = cy;
+            sb.pic.setWidth(bw); sb.pic.setHeight(bh);
+            sb.pic.setLocalTranslation(cx - bw / 2, cy - bh / 2, -7);
+        }
+    }
+
+    private void createEmber(float w, float h) {
+        Ember e = new Ember();
+        float sz = 2f + random.nextFloat() * 3f;
+        Geometry g = new Geometry("Ember", new Quad(sz, sz));
+        Material m = new Material(app.getAssetManager(), "Common/MatDefs/Misc/Unshaded.j3md");
+        m.setColor("Color", new ColorRGBA(1.0f, 0.6f, 0.2f, 0.9f));
+        m.getAdditionalRenderState().setBlendMode(com.jme3.material.RenderState.BlendMode.Additive);
+        g.setMaterial(m);
+        e.geom = g;
+        e.x = random.nextFloat() * w;
+        e.y = random.nextFloat() * h;
+        e.baseX = e.x;
+        e.size = sz;
+        e.speed = 10f + random.nextFloat() * 25f;
+        e.sway = 10f + random.nextFloat() * 25f;
+        e.phase = random.nextFloat() * 6.28f;
+        g.setLocalTranslation(e.x, e.y, -2);
+        menuNode.attachChild(g);
+        embers.add(e);
     }
 
     @Override
     protected void cleanup(Application app) {
-        buttons.clear();
-        particles.clear();
-        if (voxelWorld != null) voxelWorld.removeFromParent();
-    }
-
-
-    private Node voxelWorld;
-
-    private void createVoxelBackground() {
-        voxelWorld = new Node("VoxelWorld");
-        ColorRGBA[] biomeColors = {
-            new ColorRGBA(0.30f, 0.70f, 0.30f, 1),
-            new ColorRGBA(0.45f, 0.30f, 0.18f, 1),
-            new ColorRGBA(0.50f, 0.50f, 0.54f, 1),
-            new ColorRGBA(0.88f, 0.84f, 0.55f, 1),
-            new ColorRGBA(0.88f, 0.72f, 0.58f, 1),
-            new ColorRGBA(0.20f, 0.50f, 0.16f, 1),
-            new ColorRGBA(0.50f, 0.88f, 0.98f, 1),
-            new ColorRGBA(0.70f, 0.32f, 0.98f, 1),
-        };
-        int N = 9;
-        float s = 1.2f;
-        for (int x = 0; x < N; x++) {
-            for (int z = 0; z < N; z++) {
-                float dx = x - (N - 1) / 2f, dz = z - (N - 1) / 2f;
-                float d = (float) Math.sqrt(dx * dx + dz * dz);
-                int h = (int) (4 - d * 0.9f);
-                if (h <= 0) continue;
-                for (int y = 0; y < h; y++) {
-                    ColorRGBA c = (y == h - 1) ? biomeColors[(x + z) % biomeColors.length] : biomeColors[2];
-                    if (y < h - 1 && (x + z + y) % 5 == 0) c = biomeColors[1];
-                    Geometry g = new Geometry("Voxel", new Box(s / 2, s / 2, s / 2));
-                    Material m = new Material(app.getAssetManager(), "Common/MatDefs/Misc/Unshaded.j3md");
-                    m.setColor("Color", c);
-                    g.setMaterial(m);
-                    g.setLocalTranslation(x * s - N * s / 2, y * s, z * s - N * s / 2);
-                    voxelWorld.attachChild(g);
-                }
-            }
-        }
-        // В 3D-сцену (rootNode), а не в ortho-guiNode — иначе кубы 1.2 единицы
-        // превращаются в 1.2 пикселя без перспективы и остров не виден.
-        voxelWorld.setLocalTranslation(0, 1.5f, 0);
-        voxelWorld.rotate(0.25f, 0, 0.08f);
-        app.getRootNode().attachChild(voxelWorld);
-    }
-
-    private void createPixelParticle(float width, float height) {
-        // Мелкие «звёзды» — тусклые точки, а не крупные падающие квадраты
-        float size = random.nextFloat() * 1.5f + 1.5f;
-        Quad quad = new Quad(size, size);
-        Geometry geom = new Geometry("Pixel", quad);
-        
-        Material mat = new Material(app.getAssetManager(), "Common/MatDefs/Misc/Unshaded.j3md");
-        float alpha = random.nextFloat() * 0.25f + 0.08f;
-        mat.setColor("Color", new ColorRGBA(0.75f, 0.78f, 0.85f, alpha));
-        mat.getAdditionalRenderState().setBlendMode(com.jme3.material.RenderState.BlendMode.Alpha);
-        geom.setMaterial(mat);
-
-        float x = random.nextFloat() * width;
-        float y = random.nextFloat() * height;
-        geom.setLocalTranslation(x, y, -1);
-
-        menuNode.attachChild(geom);
-
-        PixelParticle p = new PixelParticle();
-        p.geom = geom;
-        p.x = x;
-        p.y = y;
-        p.speed = random.nextFloat() * 8 + 4; // медленно
-        p.size = size;
-        particles.add(p);
-    }
-
-    private void switchPage(MenuPage newPage) {
-        this.currentPage = newPage;
-        for (MenuButton btn : buttons) {
-            btn.btnNode.removeFromParent();
-        }
-        buttons.clear();
-        createButtons(lastScreenWidth, lastScreenHeight);
-    }
-
-    // --- Изменено на сканирование бинарных *.dat файлов ---
-    private void scanWorldFiles() {
-        worldFilesList.clear();
-        File dir = new File(".");
-        File[] found = dir.listFiles((d, name) -> name.startsWith("save_") && name.endsWith(".dat"));
-        if (found != null) {
-            Arrays.sort(found, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
-            for (File f : found) {
-                worldFilesList.add(f);
-            }
-        }
-    }
-
-    private void createButtons(float screenWidth, float screenHeight) {
-        float startY = screenHeight / 2;
-
-        if (currentPage == MenuPage.MAIN) {
-            addButton("PLAY GAME", screenWidth / 2, startY + 50, () -> {
-                scanWorldFiles();
-                currentSavePage = 0;
-                switchPage(MenuPage.SLOTS);
-            });
-
-            addButton("SETTINGS", screenWidth / 2, startY - 10, () -> {
-                MainMenuState mainMenu = app.getStateManager().getState(MainMenuState.class);
-                app.getStateManager().detach(mainMenu); 
-
-                app.getStateManager().attach(new SettingsMenuState(() -> {
-                    app.getStateManager().detach(app.getStateManager().getState(SettingsMenuState.class));
-                    app.getStateManager().attach(mainMenu); 
-                }));
-            });
-
-            addButton("EXIT GAME", screenWidth / 2, startY - 70, () -> {
-                app.stop();
-            });
-        } else if (currentPage == MenuPage.SLOTS) {
-            int totalSaves = worldFilesList.size();
-            int startIdx = currentSavePage * SAVES_PER_PAGE;
-            int endIdx = Math.min(startIdx + SAVES_PER_PAGE, totalSaves);
-
-            if (totalSaves == 0) {
-                addButton("NO WORLDS FOUND", screenWidth / 2, startY + 90, null);
-            } else {
-                float currentY = startY + 90;
-                for (int i = startIdx; i < endIdx; i++) {
-                    File file = worldFilesList.get(i);
-                    SlotSettings settings = readSlotSettings(file);
-                    String name = "WORLD: " + file.getName().replace("save_", "").replace(".dat", "") 
-                                + " [" + (settings.isFlat ? "FLAT" : "CLASSIC") + " / " 
-                                + (settings.isCreative ? "CREATIVE" : "SURVIVAL") + "]";
-                    
-                    addButton(name, screenWidth / 2, currentY, () -> {
-                        onStartGame.onStart(file.getName(), settings.seed, settings.isCreative, settings.isFlat);
-                    });
-                    currentY -= 65;
-                }
-            }
-
-            addButton("CREATE NEW WORLD", screenWidth / 2, startY - 110, () -> {
-                this.pendingSeed = Math.abs(random.nextLong() % 100000000L);
-                switchPage(MenuPage.NEW_WORLD);
-            });
-
-            if (currentSavePage > 0) {
-                addButton("<- PREV PAGE", screenWidth / 2 - 100, startY - 170, () -> {
-                    currentSavePage--;
-                    switchPage(MenuPage.SLOTS);
-                });
-            }
-            if (endIdx < totalSaves) {
-                addButton("NEXT PAGE ->", screenWidth / 2 + 100, startY - 170, () -> {
-                    currentSavePage++;
-                    switchPage(MenuPage.SLOTS);
-                });
-            }
-
-            addButton("BACK", screenWidth / 2, startY - 225, () -> {
-                switchPage(MenuPage.MAIN);
-            });
-        } else if (currentPage == MenuPage.NEW_WORLD) {
-            seedDisplayBtn = addButton("SEED: " + pendingSeed, screenWidth / 2, startY + 110, this::randomizePendingSeed);
-
-            modeToggleBtn = addButton("MODE: " + (isCreative ? "CREATIVE" : "SURVIVAL"), screenWidth / 2, startY + 50, () -> {
-                isCreative = !isCreative;
-                modeToggleBtn.setText("MODE: " + (isCreative ? "CREATIVE" : "SURVIVAL"));
-            });
-
-            typeToggleBtn = addButton("WORLD: " + (isFlat ? "FLAT" : "CLASSIC"), screenWidth / 2, startY - 10, () -> {
-                isFlat = !isFlat;
-                typeToggleBtn.setText("WORLD: " + (isFlat ? "FLAT" : "CLASSIC"));
-            });
-
-            addButton("CREATE & PLAY", screenWidth / 2, startY - 80, () -> {
-                // Изменено расширение файла нового мира на *.dat
-                String newFileName = "save_" + (System.currentTimeMillis() / 1000L) + ".dat";
-                onStartGame.onStart(newFileName, pendingSeed, isCreative, isFlat);
-            });
-
-            addButton("BACK", screenWidth / 2, startY - 150, () -> {
-                scanWorldFiles();
-                switchPage(MenuPage.SLOTS);
-            });
-        }
-    }
-
-    // --- Чтение настроек напрямую из сжатого бинарного файла ---
-    private SlotSettings readSlotSettings(File file) {
-        long seed = 0;
-        boolean creative = true;
-        boolean flat = false;
-
-        try (FileInputStream fis = new FileInputStream(file);
-             BufferedInputStream bis = new BufferedInputStream(fis);
-             GZIPInputStream gzis = new GZIPInputStream(bis);
-             DataInputStream dis = new DataInputStream(gzis)) {
-
-            int magic = dis.readInt();
-            if (magic == 0x44534346) {
-                int version = dis.readInt();
-                seed = dis.readLong();
-                creative = dis.readBoolean();
-                flat = dis.readBoolean();
-            }
-        } catch (Exception e) {
-            System.err.println("SYSTEM ERROR: Failed to read slot binary data: " + e.getMessage());
-        }
-        return new SlotSettings(seed, creative, flat);
-    }
-
-    private static class SlotSettings {
-        long seed;
-        boolean isCreative;
-        boolean isFlat;
-        SlotSettings(long seed, boolean creative, boolean flat) {
-            this.seed = seed;
-            this.isCreative = creative;
-            this.isFlat = flat;
-        }
-    }
-
-    private void randomizePendingSeed() {
-        this.pendingSeed = Math.abs(random.nextLong() % 100000000L);
-        if (seedDisplayBtn != null) {
-            seedDisplayBtn.setText("SEED: " + pendingSeed);
-        }
-    }
-
-    private MenuButton addButton(String text, float centerX, float centerY, Runnable action) {
-        float w = 420;
-        float h = 46;
-        
-        Quad quad = new Quad(w, h);
-        Geometry geom = new Geometry("Btn_" + text, quad);
-        Material mat = new Material(app.getAssetManager(), "Common/MatDefs/Misc/Unshaded.j3md");
-        
-        ColorRGBA baseColor = new ColorRGBA(0.16f, 0.17f, 0.22f, 0.80f);
-        mat.setColor("Color", baseColor.clone());
-        mat.getAdditionalRenderState().setBlendMode(com.jme3.material.RenderState.BlendMode.Alpha);
-        geom.setMaterial(mat);
-
-        BitmapText btnText = new BitmapText(font);
-        btnText.setText(text);
-        btnText.setSize(19);
-        btnText.setColor(ColorRGBA.White);
-
-        Node border = createBorder(w, h, 2.5f, new ColorRGBA(0.30f, 0.32f, 0.40f, 1.0f), 1f);
-        // Свечение при наведении (яркая рамка, скрыта по умолчанию).
-        // ЦЕНТРИРУЕМ относительно кнопки (btnNode центр = 0,0), иначе
-        // масштабирование в update уводит рамку в сторону ("жёлтая линия").
-        Node glow = createBorder(w + 10, h + 10, 4f, new ColorRGBA(0.95f, 0.78f, 0.15f, 1.0f), 1f);
-        glow.setLocalTranslation(-(w + 10) / 2f, -(h + 10) / 2f, -0.2f);
-        glow.setCullHint(com.jme3.scene.Spatial.CullHint.Always);
-
-        Node btnNode = new Node("BtnNode_" + text);
-        btnNode.attachChild(glow);
-        btnNode.attachChild(geom);
-        btnNode.attachChild(btnText);
-        btnNode.attachChild(border);
-
-        geom.setLocalTranslation(-w / 2, -h / 2, 0);
-        border.setLocalTranslation(-w / 2, -h / 2, 0.5f);
-        btnText.setLocalTranslation(-btnText.getLineWidth() / 2, btnText.getLineHeight() / 2, 1);
-
-        btnNode.setLocalTranslation(centerX, centerY, 1);
-        menuNode.attachChild(btnNode);
-
-        MenuButton button = new MenuButton(btnNode, geom, btnText, w, h, baseColor, action, glow);
-        buttons.add(button);
-        return button;
-    }
-
-    private Node createBorder(float w, float h, float thickness, ColorRGBA color, float z) {
-        Node borderNode = new Node("BorderNode");
-        Material mat = new Material(app.getAssetManager(), "Common/MatDefs/Misc/Unshaded.j3md");
-        mat.setColor("Color", color);
-        mat.getAdditionalRenderState().setBlendMode(com.jme3.material.RenderState.BlendMode.Alpha);
-
-        Geometry top = new Geometry("B_Top", new Quad(w, thickness));
-        top.setMaterial(mat);
-        top.setLocalTranslation(0, h - thickness, z);
-        borderNode.attachChild(top);
-
-        Geometry bottom = new Geometry("B_Bottom", new Quad(w, thickness));
-        bottom.setMaterial(mat);
-        bottom.setLocalTranslation(0, 0, z);
-        borderNode.attachChild(bottom);
-
-        Geometry left = new Geometry("B_Left", new Quad(thickness, h));
-        left.setMaterial(mat);
-        left.setLocalTranslation(0, 0, z);
-        borderNode.attachChild(left);
-
-        Geometry right = new Geometry("B_Right", new Quad(thickness, h));
-        right.setMaterial(mat);
-        right.setLocalTranslation(w - thickness, 0, z);
-        borderNode.attachChild(right);
-
-        return borderNode;
-    }
-
-    private void adaptToResolution(float newWidth, float newHeight) {
-        switchPage(currentPage);
-        for (PixelParticle p : particles) {
-            p.x = random.nextFloat() * newWidth;
-            p.y = random.nextFloat() * newHeight;
-        }
+        app.getInputManager().removeRawInputListener(this);
+        menuNode.removeFromParent();
     }
 
     @Override
-    public void update(float tpf) {
-        if (voxelWorld != null) {
-            voxelWorld.rotate(0, tpf * 0.25f, 0);
-        }
-        float currentWidth = app.getCamera().getWidth();
-        float currentHeight = app.getCamera().getHeight();
-
-        if (currentWidth != lastScreenWidth || currentHeight != lastScreenHeight) {
-            lastScreenWidth = currentWidth;
-            lastScreenHeight = currentHeight;
-            adaptToResolution(currentWidth, currentHeight);
-        }
-
-        for (PixelParticle p : particles) {
-            p.y += p.speed * tpf;
-            if (p.y > lastScreenHeight) {
-                p.y = -p.size;
-                p.x = random.nextFloat() * lastScreenWidth; 
-            }
-            p.geom.setLocalTranslation(p.x, p.y, -1);
-        }
-
-        titleAnimTime += tpf * 2.0f;
-        float titleScale = 1.0f + FastMath.sin(titleAnimTime) * 0.03f;
-        
-        titleText.setLocalScale(titleScale);
-        titleShadow.setLocalScale(titleScale);
-        
-        float titleX = lastScreenWidth / 2 - (titleText.getLineWidth() * titleScale) / 2;
-        float titleY = lastScreenHeight - 120 + FastMath.cos(titleAnimTime * 1.5f) * 6.0f;
-        
-        titleShadow.setLocalTranslation(titleX + 3f, titleY - 3f, 2);
-        titleText.setLocalTranslation(titleX, titleY, 3);
-
-        float splashScale = 1.0f + FastMath.sin(titleAnimTime * 3.5f) * 0.12f;
-        splashText.setLocalScale(splashScale);
-        
-        Quaternion splashRot = new Quaternion().fromAngleAxis(-0.26f, Vector3f.UNIT_Z);
-        splashText.setLocalRotation(splashRot);
-        
-        float splashX = titleX + (titleText.getLineWidth() * titleScale) - 40f;
-        float splashY = titleY - 15f;
-        splashText.setLocalTranslation(splashX, splashY, 4);
-
-        Vector2f mousePos = app.getInputManager().getCursorPosition();
-        for (MenuButton btn : buttons) {
-            if (btn.action == null) continue;
-
-            boolean isHovered = btn.contains(mousePos.x, mousePos.y);
-            
-            ColorRGBA targetColor = isHovered ? btn.hoverColor : btn.baseColor;
-            btn.currentColor.interpolateLocal(targetColor, tpf * 10f);
-            btn.geom.getMaterial().setColor("Color", btn.currentColor);
-
-            float targetScale = isHovered ? 1.05f : 1.0f;
-            btn.currentScale = FastMath.interpolateLinear(tpf * 12.0f, btn.currentScale, targetScale);
-            btn.btnNode.setLocalScale(btn.currentScale);
-
-            // Свечение при наведении с пульсацией
-            if (btn.glow != null) {
-                if (isHovered) {
-                    btn.glowPulse += tpf * 6.0f;
-                    float a = 0.55f + FastMath.sin(btn.glowPulse) * 0.35f;
-                    btn.glow.setCullHint(com.jme3.scene.Spatial.CullHint.Inherit);
-                    // обновим прозрачность рамок glow (центрированы, масштаб не нужен)
-                    for (int i = 0; i < btn.glow.getQuantity(); i++) {
-                        Geometry g = (Geometry) btn.glow.getChild(i);
-                        g.getMaterial().setColor("Color", new ColorRGBA(0.95f, 0.78f, 0.15f, a));
-                    }
-                } else {
-                    btn.glow.setCullHint(com.jme3.scene.Spatial.CullHint.Always);
-                }
-            }
-        }
-    }
-
-    @Override
-    protected void onEnable() {
-        app.getGuiNode().attachChild(menuNode);
-        app.getFlyByCamera().setEnabled(false);
-        app.getInputManager().setCursorVisible(true);
-        // Ночное небо как фон 3D-сцены (остров виден поверх)
-        app.getViewPort().setBackgroundColor(new ColorRGBA(0.05f, 0.07f, 0.12f, 1.0f));
-        // Камера смотрит на вращающийся воксельный остров в центре 3D-сцены
-        app.getCamera().setLocation(new Vector3f(0, 3.2f, 12f));
-        app.getCamera().lookAt(new Vector3f(0, 1.5f, 0), Vector3f.UNIT_Y);
-    }
+    protected void onEnable() {}
 
     @Override
     protected void onDisable() {
@@ -527,13 +212,206 @@ public class MainMenuState extends BaseAppState implements RawInputListener {
         app.getInputManager().removeRawInputListener(this);
     }
 
+    private void switchPage(MenuPage newPage) {
+        this.currentPage = newPage;
+        boolean showSprites = (newPage == MenuPage.MAIN);
+        for (SpriteButton sb : spriteButtons) {
+            if (sb.pic != null) sb.pic.setCullHint(showSprites ? Spatial.CullHint.Never : Spatial.CullHint.Always);
+        }
+        for (MenuButton btn : buttons) btn.btnNode.removeFromParent();
+        buttons.clear();
+        pageBtnCount = 0;
+        createButtons(lastScreenWidth, lastScreenHeight);
+    }
+
+    private void scanWorldFiles() {
+        worldFilesList.clear();
+        File dir = new File(".");
+        File[] found = dir.listFiles((d, name) -> name.startsWith("save_") && name.endsWith(".dat"));
+        if (found != null) {
+            Arrays.sort(found, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+            for (File f : found) worldFilesList.add(f);
+        }
+    }
+
+    private int pageBtnCount = 0;
+
+    private void createButtons(float screenWidth, float screenHeight) {
+        if (currentPage != MenuPage.MAIN) {
+            float startY = screenHeight / 2 - 20;
+            if (currentPage == MenuPage.SLOTS) {
+                int totalSaves = worldFilesList.size();
+                int startIdx = currentSavePage * SAVES_PER_PAGE;
+                int endIdx = Math.min(startIdx + SAVES_PER_PAGE, totalSaves);
+                if (totalSaves == 0) {
+                    addButton("НЕТ СОХРАНЕНИЙ", screenWidth / 2, startY + 80, new ColorRGBA(0.4f, 0.42f, 0.46f, 0.9f), null);
+                } else {
+                    float currentY = startY + 80;
+                    for (int i = startIdx; i < endIdx; i++) {
+                        File file = worldFilesList.get(i);
+                        SlotSettings settings = readSlotSettings(file);
+                        String name = file.getName().replace("save_", "").replace(".dat", "")
+                                    + " [" + (settings.isFlat ? "FLAT" : "CLASSIC") + "/" + (settings.isCreative ? "CR" : "SUR") + "]";
+                        addButton(name, screenWidth / 2, currentY, new ColorRGBA(0.3f, 0.5f, 0.6f, 0.9f), () -> {
+                            onStartGame.onStart(file.getName(), settings.seed, settings.isCreative, settings.isFlat, 0);
+                        });
+                        currentY -= 65;
+                    }
+                }
+                addButton("СОЗДАТЬ МИР", screenWidth / 2, startY - 110, new ColorRGBA(0.85f, 0.45f, 0.12f, 0.9f), () -> {
+                    this.pendingSeed = Math.abs(random.nextLong() % 100000000L);
+                    switchPage(MenuPage.NEW_WORLD);
+                });
+                if (currentSavePage > 0)
+                    addButton("<- НАЗАД", screenWidth / 2 - 130, startY - 180, new ColorRGBA(0.4f, 0.42f, 0.46f, 0.9f), () -> { currentSavePage--; switchPage(MenuPage.SLOTS); });
+                if (endIdx < totalSaves)
+                    addButton("ВПЕРЁД ->", screenWidth / 2 + 130, startY - 180, new ColorRGBA(0.4f, 0.42f, 0.46f, 0.9f), () -> { currentSavePage++; switchPage(MenuPage.SLOTS); });
+                addButton("В МЕНЮ", screenWidth / 2, startY - 235, new ColorRGBA(0.4f, 0.42f, 0.46f, 0.9f), () -> switchPage(MenuPage.MAIN));
+            } else if (currentPage == MenuPage.NEW_WORLD) {
+                seedDisplayBtn = addButton("SEED: " + pendingSeed, screenWidth / 2, startY + 130, new ColorRGBA(0.4f, 0.42f, 0.46f, 0.9f), this::randomizePendingSeed);
+                modeToggleBtn = addButton("РЕЖИМ: " + (isCreative ? "КРЕАТИВ" : "ВЫЖИВАНИЕ"), screenWidth / 2, startY + 75, new ColorRGBA(0.4f, 0.42f, 0.46f, 0.9f), () -> {
+                    isCreative = !isCreative; modeToggleBtn.setText("РЕЖИМ: " + (isCreative ? "КРЕАТИВ" : "ВЫЖИВАНИЕ"));
+                });
+                typeToggleBtn = addButton("МИР: " + (isFlat ? "ПЛОСКИЙ" : "КЛАССИЧЕСКИЙ"), screenWidth / 2, startY + 20, new ColorRGBA(0.4f, 0.42f, 0.46f, 0.9f), () -> {
+                    isFlat = !isFlat; typeToggleBtn.setText("МИР: " + (isFlat ? "ПЛОСКИЙ" : "КЛАССИЧЕСКИЙ"));
+                });
+                classBtn = addButton("КЛАСС: ВОИН", screenWidth / 2, startY - 35, new ColorRGBA(0.4f, 0.42f, 0.46f, 0.9f), null);
+                String[] names = {"ВОИН", "МАГ", "ЛУЧНИК"};
+                for (int ci = 0; ci < 3; ci++) {
+                    final int cid = ci;
+                    float bx = screenWidth / 2 - 300 + ci * 150;
+                    addButton("> " + names[ci], bx, startY - 90, new ColorRGBA(0.5f, 0.4f, 0.6f, 0.9f), () -> {
+                        pendingClass = cid; classBtn.setText("КЛАСС: " + names[cid]);
+                    });
+                }
+                addButton("СОЗДАТЬ И ИГРАТЬ", screenWidth / 2, startY - 140, new ColorRGBA(0.85f, 0.45f, 0.12f, 0.9f), () -> {
+                    String newFileName = "save_" + (System.currentTimeMillis() / 1000L) + ".dat";
+                    onStartGame.onStart(newFileName, pendingSeed, isCreative, isFlat, pendingClass);
+                });
+                addButton("В МЕНЮ", screenWidth / 2, startY - 200, new ColorRGBA(0.4f, 0.42f, 0.46f, 0.9f), () -> { scanWorldFiles(); switchPage(MenuPage.MAIN); });
+            }
+        }
+    }
+
+    private SlotSettings readSlotSettings(File file) {
+        long seed = 0; boolean creative = true; boolean flat = false;
+        try (FileInputStream fis = new FileInputStream(file);
+             BufferedInputStream bis = new BufferedInputStream(fis);
+             GZIPInputStream gzis = new GZIPInputStream(bis);
+             DataInputStream dis = new DataInputStream(gzis)) {
+            int magic = dis.readInt();
+            if (magic == 0x44534346) {
+                dis.readInt();
+                seed = dis.readLong();
+                creative = dis.readBoolean();
+                flat = dis.readBoolean();
+            }
+        } catch (Exception e) { System.err.println("SYSTEM ERROR: " + e.getMessage()); }
+        return new SlotSettings(seed, creative, flat);
+    }
+
+    private static class SlotSettings {
+        long seed; boolean isCreative; boolean isFlat;
+        SlotSettings(long seed, boolean creative, boolean flat) { this.seed = seed; this.isCreative = creative; this.isFlat = flat; }
+    }
+
+    private void randomizePendingSeed() {
+        this.pendingSeed = Math.abs(random.nextLong() % 100000000L);
+        if (seedDisplayBtn != null) seedDisplayBtn.setText("SEED: " + pendingSeed);
+    }
+
+    private MenuButton addButton(String text, float centerX, float centerY, ColorRGBA tint, Runnable action) {
+        float w = 460, h = 58; float order = pageBtnCount++;
+        BitmapText btnShadow = new BitmapText(font); btnShadow.setText(text); btnShadow.setSize(24); btnShadow.setColor(new ColorRGBA(0,0,0,0.6f));
+        BitmapText btnText = new BitmapText(font); btnText.setText(text); btnText.setSize(24); btnText.setColor(new ColorRGBA(0.96f,0.96f,0.98f,1));
+        Node btnNode = new Node("BtnNode_" + text);
+        btnNode.attachChild(btnShadow); btnNode.attachChild(btnText);
+        btnShadow.setLocalTranslation(-btnShadow.getLineWidth() / 2 + 2, btnShadow.getLineHeight() / 2 - 2, 1);
+        btnText.setLocalTranslation(-btnText.getLineWidth() / 2, btnText.getLineHeight() / 2, 1.1f);
+        btnNode.setLocalTranslation(centerX, centerY, 1);
+        menuNode.attachChild(btnNode);
+        MenuButton button = new MenuButton(btnNode, btnText, btnShadow, w, h, tint, action);
+        button.appearDelay = order * 0.06f; button.baseY = centerY;
+        button.btnNode.setLocalTranslation(centerX, centerY + button.slideOffset, 1);
+        buttons.add(button);
+        return button;
+    }
+
+    private float bgAnimTime = 0f;
+
+    @Override
+    public void update(float tpf) {
+        bgAnimTime += tpf;
+        float currentWidth = app.getCamera().getWidth();
+        float currentHeight = app.getCamera().getHeight();
+        if (currentWidth != lastScreenWidth || currentHeight != lastScreenHeight) {
+            lastScreenWidth = currentWidth; lastScreenHeight = currentHeight;
+            layoutSprites();
+        }
+
+        float H = app.getCamera().getHeight();
+        float W = app.getCamera().getWidth();
+        for (Ember e : embers) {
+            e.y += e.speed * tpf; e.phase += tpf * 1.5f;
+            if (e.y > H + 10) { e.y = -10; e.baseX = random.nextFloat() * W; }
+            float x = e.baseX + FastMath.sin(e.phase) * e.sway;
+            float flick = 0.5f + 0.5f * FastMath.sin(e.phase * 2.3f);
+            e.geom.setLocalTranslation(x, e.y, -2);
+            ColorRGBA c = (ColorRGBA) e.geom.getMaterial().getParam("Color").getValue();
+            e.geom.getMaterial().setColor("Color", new ColorRGBA(c.r, c.g, c.b, c.a * flick));
+        }
+
+        Vector2f mousePos = app.getInputManager().getCursorPosition();
+
+        if (currentPage == MenuPage.MAIN) {
+            for (SpriteButton sb : spriteButtons) {
+                boolean isHovered = mousePos.x >= sb.cx - sb.w / 2 && mousePos.x <= sb.cx + sb.w / 2
+                                 && mousePos.y >= sb.cy - sb.h / 2 && mousePos.y <= sb.cy + sb.h / 2;
+                if (isHovered && prevHovered != sb && mainApp.soundManager != null) mainApp.soundManager.uiHover();
+                float target = isHovered ? 1.07f : 1.0f;
+                sb.scale = FastMath.interpolateLinear(tpf * 12f, sb.scale, target);
+                float cw = sb.w * sb.scale, ch = sb.h * sb.scale;
+                if (sb.pic != null) {
+                    sb.pic.setWidth(cw); sb.pic.setHeight(ch);
+                    sb.pic.setLocalTranslation(sb.cx - cw / 2f, sb.cy - ch / 2f, -7);
+                }
+                if (isHovered) prevHovered = sb;
+            }
+        }
+
+        for (MenuButton btn : buttons) {
+            if (btn.action == null) continue;
+            if (btn.appearT < 1.0f) {
+                float t = btn.appearDelay;
+                if (t <= 0f) btn.appearT = FastMath.clamp(btn.appearT + tpf * 3.0f, 0, 1);
+                else if (bgAnimTime >= t) btn.appearT = FastMath.clamp(btn.appearT + tpf * 3.0f, 0, 1);
+            }
+            float e = 1.0f - (1.0f - btn.appearT) * (1.0f - btn.appearT);
+            btn.btnNode.setLocalTranslation(btn.btnNode.getLocalTranslation().x, btn.baseY + btn.slideOffset * (1.0f - e), 1);
+            boolean isHovered = btn.contains(mousePos.x, mousePos.y);
+            if (isHovered && prevHovered != btn && mainApp.soundManager != null) mainApp.soundManager.uiHover();
+            if (isHovered) prevHovered = btn;
+        }
+    }
+
     @Override
     public void onMouseButtonEvent(MouseButtonEvent evt) {
         if (evt.isReleased() && evt.getButtonIndex() == 0) {
+            Vector2f mp = new Vector2f(evt.getX(), evt.getY());
+            if (currentPage == MenuPage.MAIN) {
+                for (SpriteButton sb : spriteButtons) {
+                    if (mp.x >= sb.cx - sb.w / 2 && mp.x <= sb.cx + sb.w / 2 && mp.y >= sb.cy - sb.h / 2 && mp.y <= sb.cy + sb.h / 2) {
+                        if (mainApp.soundManager != null) mainApp.soundManager.uiClick();
+                        if (sb.action != null) sb.action.run();
+                        return;
+                    }
+                }
+            }
             for (MenuButton btn : buttons) {
-                if (btn.action != null && btn.contains(evt.getX(), evt.getY())) {
+                if (btn.action != null && btn.contains(mp.x, mp.y)) {
+                    if (mainApp.soundManager != null) mainApp.soundManager.uiClick();
                     btn.action.run();
-                    break;
+                    return;
                 }
             }
         }
@@ -548,49 +426,33 @@ public class MainMenuState extends BaseAppState implements RawInputListener {
     @Override public void onTouchEvent(com.jme3.input.event.TouchEvent evt) {}
 
     private static class MenuButton {
-        Node btnNode;
-        Geometry geom;
-        BitmapText textNode;
-        float w, h;
-        ColorRGBA baseColor;
-        ColorRGBA hoverColor;
-        ColorRGBA currentColor;
-        float currentScale = 1.0f;
-        Runnable action;
-        Node glow;
-        float glowPulse = 0f;
-
-        public MenuButton(Node btnNode, Geometry geom, BitmapText textNode, float w, float h, ColorRGBA baseColor, Runnable action, Node glow) {
-            this.btnNode = btnNode;
-            this.geom = geom;
-            this.textNode = textNode;
-            this.w = w;
-            this.h = h;
-            this.baseColor = baseColor;
-            this.hoverColor = new ColorRGBA(0.35f, 0.38f, 0.45f, 0.95f);
-            this.currentColor = baseColor.clone();
+        Node btnNode; BitmapText textNode; BitmapText shadowNode;
+        float w, h; ColorRGBA tint;
+        float currentScale = 1.0f; Runnable action;
+        float appearDelay = 0f; float appearT = 0f; float baseY = 0f; float slideOffset = 30f;
+        public MenuButton(Node btnNode, BitmapText textNode, BitmapText shadowNode,
+                          float w, float h, ColorRGBA tint, Runnable action) {
+            this.btnNode = btnNode; this.textNode = textNode; this.shadowNode = shadowNode;
+            this.w = w; this.h = h; this.tint = tint;
             this.action = action;
-            this.glow = glow;
         }
-
-        public void setText(String newText) {
-            if (textNode != null) {
-                textNode.setText(newText);
-                textNode.setLocalTranslation(-textNode.getLineWidth() / 2, textNode.getLineHeight() / 2, 1);
-            }
+        public void setText(String t) {
+            if (textNode != null) { textNode.setText(t); textNode.setLocalTranslation(-textNode.getLineWidth()/2, textNode.getLineHeight()/2, 1.1f); }
+            if (shadowNode != null) { shadowNode.setText(t); shadowNode.setLocalTranslation(-shadowNode.getLineWidth()/2 + 2, shadowNode.getLineHeight()/2 - 2, 1); }
         }
-
         public boolean contains(float mx, float my) {
-            float bx = btnNode.getLocalTranslation().x;
-            float by = btnNode.getLocalTranslation().y;
-            return mx >= bx - w / 2 && mx <= bx + w / 2 && my >= by - h / 2 && my <= by + h / 2;
+            float bx = btnNode.getLocalTranslation().x, by = btnNode.getLocalTranslation().y;
+            return mx >= bx - w/2 && mx <= bx + w/2 && my >= by - h/2 && my <= by + h/2;
         }
     }
 
-    private static class PixelParticle {
-        Geometry geom;
-        float x, y;
-        float speed;
-        float size;
+    private static class SpriteButton {
+        String texName; Runnable action;
+        Picture pic; float cx, cy, w, h, scale = 1.0f;
+        SpriteButton(String texName, Runnable action) { this.texName = texName; this.action = action; }
+    }
+
+    private static class Ember {
+        Geometry geom; float x, y, baseX, size, speed, sway, phase;
     }
 }

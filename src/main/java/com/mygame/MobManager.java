@@ -81,8 +81,13 @@ public class MobManager {
     }
 
     public void update(float tpf, World world, Vector3f playerPos) {
+        if (world == null || playerPos == null) return; // защита от NPE при раннем вызове
         for (Mob mob : mobs) {
-            mob.update(tpf, world, playerPos);
+            try {
+                mob.update(tpf, world, playerPos); // один упавший моб не роняет игру
+            } catch (Throwable t) {
+                System.err.println("[Mob] update упал для типа " + mob.mobType + ": " + t);
+            }
         }
     }
 
@@ -581,6 +586,8 @@ public class MobManager {
         }
 
         public void update(float tpf, World world, Vector3f playerPos) {
+            if (world == null || playerPos == null || dead) return; // защита от NPE/двойного апдейта
+            try {
             float distToPlayer = position.distance(playerPos);
             boolean isHostile = (mobType == 3 || mobType == 5 || mobType == 6
                     || mobType == 11 || mobType == 12 || mobType == 13 || mobType == 18);
@@ -736,6 +743,9 @@ public class MobManager {
                     ownerApp.player.velocity.addLocal(knock.mult(4.0f));
                     }
                 }
+            } catch (Throwable t) {
+                System.err.println("[Mob] тип " + mobType + " упал в update: " + t);
+            }
         }
 
         public boolean damage(float amount) {

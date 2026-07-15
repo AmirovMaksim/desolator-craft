@@ -31,7 +31,7 @@ public class Player {
     public float fallDistance = 0.0f; 
 
     public float health = 20.0f;
-    public final float maxHealth = 20.0f;
+    public float maxHealth = 20.0f;
     public float hunger = 20.0f;
     public final float maxHunger = 20.0f;
     public boolean isDead = false;
@@ -39,6 +39,18 @@ public class Player {
     public float oxygen = 10.0f;
     public final float maxOxygen = 10.0f;
     public boolean isGodMode = false;
+    public PlayerClass playerClass = PlayerClass.WARRIOR;
+    public float mana = 0.0f;
+    public float maxMana = 0.0f;
+
+    /** Применяет стартовые бонусы класса (HP/MP). Вызывается при создании мира. */
+    public void applyClass(PlayerClass c) {
+        this.playerClass = c;
+        this.maxHealth = c.baseHP;
+        this.health = c.baseHP;
+        this.maxMana = c.baseMana;
+        this.mana = c.baseMana;
+    }
     private float drownDamageTimer = 0.0f;
 
     // НАСЫЩЕНИЕ (saturation): еда даёт сначала его, потом голод.

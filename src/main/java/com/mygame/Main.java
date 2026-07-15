@@ -52,9 +52,7 @@ public class Main extends SimpleApplication implements RawInputListener {
     final PlayerModel playerModel = new PlayerModel();
     final UserInterfaceManager ui = new UserInterfaceManager();
     final MobManager mobManager = new MobManager(); 
-    VillageManager villageManager = null;
-
-    /** Безопасный доступ к assetManager для внешних менеджеров (VillageManager и т.п.). */
+    /** Безопасный доступ к assetManager для внешних менеджеров. */
     public AssetManager getAssetManagerSafe() { return assetManager; }
 
     final EnvironmentManager environmentManager = new EnvironmentManager();
@@ -167,6 +165,10 @@ public class Main extends SimpleApplication implements RawInputListener {
         inputManager.addMapping("OpenConsole", new KeyTrigger(KeyInput.KEY_T));
         inputManager.addMapping("Respawn", new KeyTrigger(KeyInput.KEY_R));
 
+        // Звук ДОЛЖЕН инициализироваться сразу (для меню), а не только в startGame.
+        soundManager.init(assetManager);
+        soundManager.setEnabled(GameSettings.soundEnabled);
+
         inputManager.addListener(movementListener, "MoveForward", "MoveBackward", "MoveLeft", "MoveRight", "Jump", "MoveDown", "Sprint");
         inputManager.addListener(pauseListener, "PauseGame");
         inputManager.addListener(interactListener, "Interact", "PlaceBlock");
@@ -183,7 +185,7 @@ public class Main extends SimpleApplication implements RawInputListener {
         inputManager.addMapping("ScrollDown", new MouseAxisTrigger(MouseInput.AXIS_WHEEL, true));
         inputManager.addListener(scrollListener, "ScrollUp", "ScrollDown");
 
-        mainMenuState = new MainMenuState((slot, seed, creative, flat) -> startGame(slot, seed, creative, flat));
+        mainMenuState = new MainMenuState((slot, seed, creative, flat, pc) -> startGame(slot, seed, creative, flat, pc));
         stateManager.attach(mainMenuState);
         inputManager.addRawInputListener(this);
     }
@@ -375,8 +377,8 @@ public class Main extends SimpleApplication implements RawInputListener {
         weatherManager.cleanup();
         loadingScreen.cleanup();
         cloudManager.cleanup();
-        mobManager.cleanup(); 
-        mainMenuState = new MainMenuState((slot, seed, creative, flat) -> startGame(slot, seed, creative, flat));
+        mobManager.cleanup();
+        mainMenuState = new MainMenuState((slot, seed, creative, flat, pc) -> startGame(slot, seed, creative, flat, pc));
         stateManager.attach(mainMenuState);
     }
 
@@ -473,7 +475,7 @@ public class Main extends SimpleApplication implements RawInputListener {
         }
     }
 
-    public void startGame(String slotFile, long customSeed, boolean creative, boolean flat) {
+    public void startGame(String slotFile, long customSeed, boolean creative, boolean flat, int playerClass) {
         stateManager.detach(mainMenuState);
         ColorRGBA skyColor = new ColorRGBA(0.45f, 0.65f, 0.95f, 1.0f);
         viewPort.setBackgroundColor(skyColor);
@@ -483,8 +485,8 @@ public class Main extends SimpleApplication implements RawInputListener {
 
         rootNode.setShadowMode(RenderQueue.ShadowMode.CastAndReceive); 
         world = new World(blockMaterials, rootNode, slotFile, this);
-        villageManager = new VillageManager(world, this);
-        world.setVillageManager(villageManager);
+        world.setPlayerClass(playerClass);
+        player.applyClass(PlayerClass.fromId(playerClass));
         loadingScreen.init(assetManager, guiNode, guiFont, cam.getWidth(), cam.getHeight());
         cloudManager.init(assetManager, rootNode);
 
@@ -496,6 +498,14 @@ public class Main extends SimpleApplication implements RawInputListener {
             
             // Хотбар ПУСТ по умолчанию (блоки добываются в выживании вручную).
             selectedSlot = 0;
+            // Стартовый "инструмент" класса (заглушка до полноценного оружия след. этапом).
+            byte starter = switch (playerClass) {
+                case 1 -> 33; // Маг — светящийся блок (аналог посоха)
+                case 2 -> 6;  // Лучник — доски (аналог лука)
+                default -> 5; // Воин — камень (аналог меча)
+            };
+            player.inventory[0].blockType = starter;
+            player.inventory[0].count = 1;
 
             // ВРЕМЕННО: игрок высоко в воздухе, пока мир грузится
             // (чтобы не провалиться в незагруженные чанки).

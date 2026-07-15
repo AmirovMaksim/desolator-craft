@@ -491,6 +491,7 @@ public class Chunk {
         if (continent < -0.55) return 12; // OCEAN
         if (continent < -0.38) return 13; // BEACH/SHORE
 
+
         if (temp < -0.45) {
             return humid > 0.1 ? 10 : 2;
         } else if (temp < -0.15) {

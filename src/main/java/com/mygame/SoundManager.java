@@ -79,6 +79,10 @@ public class SoundManager {
     private void generateAll() {
         // step — шаги по земле (два чуть разных тембра)
         register("step", synthStep(180f, 0.06f));
+        // hover — тихий высокий блип при наведении на кнопку меню
+        register("hover", synthTone(720f, 0.05f, 0.12f));
+        // click — короткий щелчок при нажатии кнопки меню
+        register("click", synthTone(340f, 0.06f, 0.20f));
         // jump — лёгкий «тпруть»
         register("jump", synthTone(420f, 0.09f, 0.22f));
         // land — приземление (ниже и глуше)
@@ -289,6 +293,8 @@ public class SoundManager {
     public void hit()       { play("hit", 0.45f, 0.05f); }
     public void hurt()      { play("hurt", 0.7f, 0.25f); }
     public void death()     { play("death", 0.8f, 0f); }
+    public void uiHover()   { play("hover", 0.30f, 0.04f); }
+    public void uiClick()   { play("click", 0.40f, 0.04f); }
     public void pickup()    { play("pickup", 0.5f, 0.05f); }
     public void drop()      { play("drop", 0.5f, 0f); }
     public void eat()       { play("eat", 0.5f, 0f); }
