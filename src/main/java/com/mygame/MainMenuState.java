@@ -74,6 +74,7 @@ public class MainMenuState extends BaseAppState implements RawInputListener {
 
     private Picture bgPic;
     private final List<SpriteButton> spriteButtons = new ArrayList<>();
+    private boolean mousePressed = false; // true пока ЛКМ зажата (для анимации нажатия)
 
     private List<File> worldFilesList = new ArrayList<>();
     private int currentSavePage = 0;
@@ -170,9 +171,9 @@ public class MainMenuState extends BaseAppState implements RawInputListener {
                 sb.pic.setTexture(app.getAssetManager(), tex(sb.texName), true);
                 menuNode.attachChild(sb.pic);
             }
-            sb.w = bw; sb.h = bh; sb.cx = cx; sb.cy = cy;
+            sb.baseW = bw; sb.baseH = bh; sb.baseX = cx - bw / 2f; sb.baseY = cy - bh / 2f; sb.cx = cx; sb.cy = cy;
             sb.pic.setWidth(bw); sb.pic.setHeight(bh);
-            sb.pic.setLocalTranslation(cx - bw / 2, cy - bh / 2, -7);
+            sb.pic.setLocalTranslation(sb.baseX, sb.baseY, -7);
         }
     }
 
@@ -365,15 +366,24 @@ public class MainMenuState extends BaseAppState implements RawInputListener {
 
         if (currentPage == MenuPage.MAIN) {
             for (SpriteButton sb : spriteButtons) {
-                boolean isHovered = mousePos.x >= sb.cx - sb.w / 2 && mousePos.x <= sb.cx + sb.w / 2
-                                 && mousePos.y >= sb.cy - sb.h / 2 && mousePos.y <= sb.cy + sb.h / 2;
+                boolean isHovered = mousePos.x >= sb.cx - sb.baseW / 2 && mousePos.x <= sb.cx + sb.baseW / 2
+                                 && mousePos.y >= sb.cy - sb.baseH / 2 && mousePos.y <= sb.cy + sb.baseH / 2;
                 if (isHovered && prevHovered != sb && mainApp.soundManager != null) mainApp.soundManager.uiHover();
-                float target = isHovered ? 1.07f : 1.0f;
-                sb.scale = FastMath.interpolateLinear(tpf * 12f, sb.scale, target);
-                float cw = sb.w * sb.scale, ch = sb.h * sb.scale;
+
+                // ТОЛЬКО для кнопок: плавное масштабирование относительно центра.
+                // Рамка (bgPic) остаётся статичной — её здесь не трогаем.
+                float targetScale = 1.0f;
+                if (isHovered) targetScale = mousePressed ? 0.95f : 1.05f;
+                sb.scale = FastMath.interpolateLinear(tpf * 10f, sb.scale, targetScale);
+
+                float btnW = sb.baseW * sb.scale;
+                float btnH = sb.baseH * sb.scale;
+                float offsetX = (sb.baseW - btnW) / 2f;
+                float offsetY = (sb.baseH - btnH) / 2f;
                 if (sb.pic != null) {
-                    sb.pic.setWidth(cw); sb.pic.setHeight(ch);
-                    sb.pic.setLocalTranslation(sb.cx - cw / 2f, sb.cy - ch / 2f, -7);
+                    sb.pic.setWidth(btnW);
+                    sb.pic.setHeight(btnH);
+                    sb.pic.setLocalTranslation(sb.baseX + offsetX, sb.baseY + offsetY, -7);
                 }
                 if (isHovered) prevHovered = sb;
             }
@@ -396,11 +406,14 @@ public class MainMenuState extends BaseAppState implements RawInputListener {
 
     @Override
     public void onMouseButtonEvent(MouseButtonEvent evt) {
+        if (evt.getButtonIndex() == 0) {
+            mousePressed = !evt.isReleased(); // true пока ЛКМ зажата -> анимация сжатия
+        }
         if (evt.isReleased() && evt.getButtonIndex() == 0) {
             Vector2f mp = new Vector2f(evt.getX(), evt.getY());
             if (currentPage == MenuPage.MAIN) {
                 for (SpriteButton sb : spriteButtons) {
-                    if (mp.x >= sb.cx - sb.w / 2 && mp.x <= sb.cx + sb.w / 2 && mp.y >= sb.cy - sb.h / 2 && mp.y <= sb.cy + sb.h / 2) {
+                    if (mp.x >= sb.cx - sb.baseW / 2 && mp.x <= sb.cx + sb.baseW / 2 && mp.y >= sb.cy - sb.baseH / 2 && mp.y <= sb.cy + sb.baseH / 2) {
                         if (mainApp.soundManager != null) mainApp.soundManager.uiClick();
                         if (sb.action != null) sb.action.run();
                         return;
@@ -448,7 +461,10 @@ public class MainMenuState extends BaseAppState implements RawInputListener {
 
     private static class SpriteButton {
         String texName; Runnable action;
-        Picture pic; float cx, cy, w, h, scale = 1.0f;
+        Picture pic;
+        float baseX, baseY, baseW, baseH;  // базовый прямоугольник (статичная рамка)
+        float cx, cy;                       // центр (для hit-test)
+        float scale = 1.0f;                 // текущий масштаб (анимируется 1.0<->1.05<->0.95)
         SpriteButton(String texName, Runnable action) { this.texName = texName; this.action = action; }
     }
 
